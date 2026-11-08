@@ -1,0 +1,42 @@
+name: cars-digest
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # раз в сутки в 06:17 UTC; время можно поменять
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: "Отправить тестовые ДЕМО-машины"
+        type: boolean
+        default: false
+      dry:
+        description: "Только показать выбор в логах, ничего не отправлять"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Minsk   # часовой пояс для счётчика «N постов в день»; поставьте свой
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python main.py ${{ inputs.demo && '--demo' || '' }} ${{ inputs.dry && '--dry' || '' }}
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+      - name: Save state
+        run: |
+          git config user.name "cars-bot"
+          git config user.email "cars-bot@users.noreply.github.com"
+          if [ -f state.json ]; then git add state.json; fi
+          git diff --cached --quiet || git commit -m "update state"
+          git push
