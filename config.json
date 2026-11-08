@@ -1,0 +1,41 @@
+{
+  "daily_limit": 8,
+  "per_source_max": 4,
+  "filters": {
+    "year_min": 2019,
+    "price_usd_max": 20000,
+    "km_max": 100000
+  },
+  "sources": [
+    {
+      "name": "Encar",
+      "enabled": false,
+      "type": "json",
+      "url": "ЗАМЕНИТЬ",
+      "headers": {},
+      "items_path": "",
+      "price_mult": 1,
+      "fields": {"id": "ЗАМЕНИТЬ", "title": "ЗАМЕНИТЬ", "model": "", "price": "ЗАМЕНИТЬ", "year": "ЗАМЕНИТЬ", "km": "", "url": "ЗАМЕНИТЬ", "photo": ""}
+    },
+    {
+      "name": "Copart",
+      "enabled": false,
+      "type": "apify",
+      "actor": "АВТОР~НАЗВАНИЕ-АКТОРА",
+      "input": {"searchQueries": ["toyota camry"], "maxItems": 100},
+      "items_path": "",
+      "price_mult": 1,
+      "fields": {"id": "ЗАМЕНИТЬ", "title": "ЗАМЕНИТЬ", "model": "", "price": "ЗАМЕНИТЬ", "year": "ЗАМЕНИТЬ", "km": "", "url": "ЗАМЕНИТЬ", "photo": ""}
+    },
+    {
+      "name": "mashina.kg",
+      "enabled": false,
+      "type": "json",
+      "url": "ЗАМЕНИТЬ",
+      "headers": {},
+      "items_path": "",
+      "price_mult": 1,
+      "fields": {"id": "ЗАМЕНИТЬ", "title": "ЗАМЕНИТЬ", "model": "", "price": "ЗАМЕНИТЬ", "year": "ЗАМЕНИТЬ", "km": "", "url": "ЗАМЕНИТЬ", "photo": ""}
+    }
+  ]
+}
