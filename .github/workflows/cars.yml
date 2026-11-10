@@ -2,7 +2,8 @@ name: cars-digest
 
 on:
   schedule:
-    - cron: "17 6 * * *"   # раз в сутки в 06:17 UTC; время можно поменять
+    # время указано в UTC; Минск = UTC+3, поэтому запуски в 09:05, 12:05, 17:05 и 21:05 по Минску
+    - cron: "5 6,9,14,18 * * *"
   workflow_dispatch:
     inputs:
       demo:
@@ -17,11 +18,16 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: cars-digest
+  cancel-in-progress: false
+
 jobs:
   digest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
-      TZ: Europe/Minsk   # часовой пояс для счётчика «N постов в день»; поставьте свой
+      TZ: Europe/Minsk
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,9 +40,10 @@ jobs:
           TG_CHAT: ${{ secrets.TG_CHAT }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
       - name: Save state
+        if: always()
         run: |
           git config user.name "cars-bot"
           git config user.email "cars-bot@users.noreply.github.com"
           if [ -f state.json ]; then git add state.json; fi
           git diff --cached --quiet || git commit -m "update state"
-          git push
+          git push || (git pull --rebase && git push)
