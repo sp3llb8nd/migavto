@@ -656,7 +656,7 @@
     },
     {
       "name": "mashina.kg",
-      "enabled": false,
+      "enabled": true,
       "type": "apify",
       "actor": "logiover~mashina-kg-car-scraper",
       "header": "Авто из Кыргызстана",
