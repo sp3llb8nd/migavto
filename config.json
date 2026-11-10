@@ -1,12 +1,21 @@
 {
   "daily_limit": 10,
-  "per_source_max": 5,
+  "per_source_max": 4,
   "max_photos": 10,
+  "pool_size": 40,
+  "tz": "Europe/Minsk",
+  "post_times": [
+    "09:00",
+    "12:00",
+    "17:00",
+    "21:00"
+  ],
+  "slot_tolerance_min": 45,
   "order_link": "@migavtologistic_bot",
   "notes_header": "По предварительной информации:",
   "template": [
-    "<b>Авто из Кореи и Кыргызстана</b>",
-    "🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷🇰🇷",
+    "<b>{header}</b>",
+    "{flags}",
     "",
     "<b><i><u>{title}</u></i></b>",
     "",
@@ -23,6 +32,7 @@
     "",
     "{market_line}",
     "",
+    "{note}",
     "Для заказа и полной информации по авто пишите 👇: {order_link}"
   ],
   "filters": {
@@ -377,76 +387,271 @@
       }
     }
   },
+  "translate": {
+    "현대": "Hyundai",
+    "기아": "Kia",
+    "제네시스": "Genesis",
+    "쉐보레": "Chevrolet",
+    "르노코리아": "Renault",
+    "르노삼성": "Renault",
+    "KG모빌리티": "KGM",
+    "쌍용": "SsangYong",
+    "벤츠": "Mercedes-Benz",
+    "아우디": "Audi",
+    "폭스바겐": "Volkswagen",
+    "볼보": "Volvo",
+    "렉서스": "Lexus",
+    "토요타": "Toyota",
+    "혼다": "Honda",
+    "닛산": "Nissan",
+    "포드": "Ford",
+    "테슬라": "Tesla",
+    "미니": "Mini",
+    "랜드로버": "Land Rover",
+    "포르쉐": "Porsche",
+    "지프": "Jeep",
+    "푸조": "Peugeot",
+    "캐딜락": "Cadillac",
+    "링컨": "Lincoln",
+    "팰리세이드": "Palisade",
+    "투싼": "Tucson",
+    "싼타페": "Santa Fe",
+    "쏘나타": "Sonata",
+    "코나": "Kona",
+    "그랜저": "Grandeur",
+    "아반떼": "Avante",
+    "스타리아": "Staria",
+    "베뉴": "Venue",
+    "캐스퍼": "Casper",
+    "아이오닉": "Ioniq",
+    "넥쏘": "Nexo",
+    "맥스크루즈": "Maxcruz",
+    "싼타크루즈": "Santa Cruz",
+    "스포티지": "Sportage",
+    "쏘렌토": "Sorento",
+    "카니발": "Carnival",
+    "셀토스": "Seltos",
+    "니로": "Niro",
+    "모닝": "Morning",
+    "레이": "Ray",
+    "스토닉": "Stonic",
+    "쏘울": "Soul",
+    "모하비": "Mohave",
+    "스팅어": "Stinger",
+    "프라이드": "Rio",
+    "디 올 뉴": "",
+    "더 뉴": "",
+    "올 뉴": "",
+    "신형": "",
+    "페이스리프트": "",
+    "하이브리드": "Hybrid",
+    "프레스티지": "Prestige",
+    "노블레스": "Noblesse",
+    "시그니처": "Signature",
+    "익스클루시브": "Exclusive",
+    "프리미엄": "Premium",
+    "인스퍼레이션": "Inspiration",
+    "캘리그래피": "Calligraphy",
+    "스마트": "Smart",
+    "모던": "Modern",
+    "트렌디": "Trendy",
+    "마스터즈": "Masters",
+    "럭셔리": "Luxury",
+    "그래비티": "Gravity",
+    "플래티넘": "Platinum",
+    "에어": "Air",
+    "어스": "Earth",
+    "가솔린": "бензин",
+    "디젤": "дизель",
+    "전기": "электро",
+    "수소": "водород",
+    "LPG": "LPG",
+    "오토": "автомат",
+    "수동": "механика"
+  },
   "sources": [
     {
       "name": "Encar",
       "enabled": false,
       "type": "apify",
-      "actor": "automation-lab~encar-used-car-listings-scraper",
+      "actor": "bovi~encar-scraper",
+      "header": "Авто из Кореи",
+      "flag": "🇰🇷",
+      "note": "🇰🇷 Авто из Южной Кореи (площадка Encar)",
       "input": {
-        "maxItems": 15
+        "carType": "all",
+        "manufacturer": "현대",
+        "model": "팰리세이드",
+        "yearFrom": 2018,
+        "mileageMax": 150000,
+        "sortBy": "ModifiedDate",
+        "maxResults": 10,
+        "proxyConfiguration": {
+          "useApifyProxy": true,
+          "apifyProxyGroups": [
+            "RESIDENTIAL"
+          ]
+        }
       },
       "items_path": "",
-      "price_mult": 1,
+      "price_mult": 0.00074,
+      "photo_seq": true,
       "turnkey": {
         "mult": 1.0,
         "add_usd": 5000,
         "customs": true
       },
       "fields": {
-        "id": "ЗАМЕНИТЬ",
-        "title": "ЗАМЕНИТЬ",
-        "make": "",
-        "model": "",
-        "price": "ЗАМЕНИТЬ",
-        "year": "ЗАМЕНИТЬ",
-        "km": "",
-        "url": "ЗАМЕНИТЬ",
-        "photos": "",
+        "id": "carId",
+        "title": [
+          "manufacturer",
+          "model",
+          "badge",
+          "badgeDetail"
+        ],
+        "make": "manufacturer",
+        "model": "model",
+        "price": "priceKrw",
+        "year": "yearMonth",
+        "km": "mileageKm",
+        "url": "url",
+        "photos": "imageUrl",
+        "photo_count": "photoCount",
+        "engine_cc": "badge",
+        "fuel": "fuelType",
         "engine": "",
         "transmission": "",
         "drive": "",
         "color": "",
-        "notes": [],
-        "engine_cc": "",
-        "fuel": ""
+        "notes": [
+          {
+            "icon": "✅",
+            "text": "Есть диагностика Encar",
+            "path": "hasInspection"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Encar",
+      "enabled": false,
+      "type": "apify",
+      "actor": "bovi~encar-scraper",
+      "header": "Авто из Кореи",
+      "flag": "🇰🇷",
+      "note": "🇰🇷 Авто из Южной Кореи (площадка Encar)",
+      "input": {
+        "carType": "all",
+        "manufacturer": "현대",
+        "model": "싼타페",
+        "yearFrom": 2018,
+        "mileageMax": 150000,
+        "sortBy": "ModifiedDate",
+        "maxResults": 10,
+        "proxyConfiguration": {
+          "useApifyProxy": true,
+          "apifyProxyGroups": [
+            "RESIDENTIAL"
+          ]
+        }
+      },
+      "items_path": "",
+      "price_mult": 0.00074,
+      "photo_seq": true,
+      "turnkey": {
+        "mult": 1.0,
+        "add_usd": 5000,
+        "customs": true
+      },
+      "fields": {
+        "id": "carId",
+        "title": [
+          "manufacturer",
+          "model",
+          "badge",
+          "badgeDetail"
+        ],
+        "make": "manufacturer",
+        "model": "model",
+        "price": "priceKrw",
+        "year": "yearMonth",
+        "km": "mileageKm",
+        "url": "url",
+        "photos": "imageUrl",
+        "photo_count": "photoCount",
+        "engine_cc": "badge",
+        "fuel": "fuelType",
+        "engine": "",
+        "transmission": "",
+        "drive": "",
+        "color": "",
+        "notes": [
+          {
+            "icon": "✅",
+            "text": "Есть диагностика Encar",
+            "path": "hasInspection"
+          }
+        ]
       }
     },
     {
       "name": "Copart",
       "enabled": false,
       "type": "apify",
-      "actor": "haketa~copart-scraper",
+      "actor": "ahmed_jasarevic~copart-scraper",
+      "header": "Авто из США",
+      "flag": "🇺🇸",
+      "note": "🇺🇸 Авто из США (аукцион Copart)",
       "input": {
-        "searchQueries": [
-          "toyota camry"
+        "startUrls": [
+          {
+            "url": "https://www.copart.com/lotSearchResults/?free=true&query=toyota+camry"
+          }
         ],
-        "maxItems": 15
+        "maxItems": 10,
+        "maxRequestRetries": 5,
+        "proxyConfiguration": {
+          "useApifyProxy": true
+        }
       },
       "items_path": "",
       "price_mult": 1,
+      "km_mult": 1.609,
+      "nice_case": true,
       "turnkey": {
         "mult": 1.0,
         "add_usd": 4000,
         "customs": true
       },
       "fields": {
-        "id": "ЗАМЕНИТЬ",
-        "title": "ЗАМЕНИТЬ",
-        "make": "",
-        "model": "",
-        "price": "ЗАМЕНИТЬ",
-        "year": "ЗАМЕНИТЬ",
-        "km": "",
-        "url": "ЗАМЕНИТЬ",
-        "photos": "",
+        "id": "lotNumber",
+        "title": [
+          "year",
+          "make",
+          "model",
+          "trim"
+        ],
+        "make": "make",
+        "model": "model",
+        "price": "currentBid",
+        "year": "year",
+        "km": "odometer",
+        "url": "url",
+        "photos": "thumbnail",
+        "photo_count": "",
+        "engine_cc": "engine",
+        "fuel": "fuel",
         "engine": "",
-        "transmission": "",
-        "drive": "",
-        "color": "",
-        "notes": [],
-        "engine_cc": "",
-        "fuel": ""
+        "transmission": "transmission",
+        "drive": "drive",
+        "color": "color",
+        "notes": [
+          {
+            "icon": "💥",
+            "text": "Повреждение: {}",
+            "path": "primaryDamage"
+          }
+        ]
       }
     },
     {
@@ -454,6 +659,9 @@
       "enabled": false,
       "type": "apify",
       "actor": "logiover~mashina-kg-car-scraper",
+      "header": "Авто из Кыргызстана",
+      "flag": "🇰🇬",
+      "note": "🇰🇬 Авто из Кыргызстана (площадка mashina.kg)",
       "input": {
         "startUrl": "ЗАМЕНИТЬ",
         "maxResults": 15
@@ -473,15 +681,22 @@
         "price": "priceUsd",
         "year": "year",
         "km": "mileage",
-        "url": "ЗАМЕНИТЬ",
+        "url": "listingUrl",
         "photos": "imageUrl",
+        "photo_count": "",
+        "engine_cc": "engine",
+        "fuel": "",
         "engine": "",
-        "transmission": "",
+        "transmission": "transmission",
         "drive": "",
         "color": "",
-        "notes": [],
-        "engine_cc": "",
-        "fuel": ""
+        "notes": [
+          {
+            "icon": "📍",
+            "text": "Город: {}",
+            "path": "location"
+          }
+        ]
       }
     }
   ]
