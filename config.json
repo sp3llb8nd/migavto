@@ -663,8 +663,8 @@
       "flag": "🇰🇬",
       "note": "🇰🇬 Авто из Кыргызстана (площадка mashina.kg)",
       "input": {
-        "startUrl": "ЗАМЕНИТЬ",
-        "maxResults": 15
+        "startUrl": "https://mashina.kg/catalog/passenger?category_id=1&year__gte=2018&page=1&sort_by=upped_at&order=desc",
+        "maxResults": 25
       },
       "items_path": "",
       "price_mult": 1,
