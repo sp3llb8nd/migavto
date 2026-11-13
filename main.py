@@ -9,8 +9,10 @@ python main.py --dry    показать выбор в логе, ничего н
 python main.py --demo   отправить тестовые «ДЕМО»-машины (площадки не нужны, состояние не пишется)
 """
 import html
+import io
 import json
 import os
+import random
 import re
 import statistics
 import sys
@@ -285,6 +287,8 @@ def normalize(raw, src):
 
 
 def fetch(src):
+    if src["type"] == "mashina_web":
+        return fetch_mashina(src)
     if not turnkey_ok(src):
         raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
     cars, errs, first_err = [], Counter(), None
@@ -299,6 +303,125 @@ def fetch(src):
     for msg, n in errs.most_common(3):
         print(f"   пропущено {n} шт. ({src['name']}): {msg}")
     return cars
+
+
+# ---------- прямой парсер mashina.kg (без Apify) ----------
+def mashina_page_items(page_html):
+    """Достаёт объявления со страницы mashina.kg: сайт встраивает их JSON-ом в скрипты Next.js."""
+    parts = []
+    for m in re.finditer(r'<script[^>]*>self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', page_html, re.S):
+        try:
+            parts.append(json.loads('"' + m.group(1) + '"'))
+        except ValueError:
+            continue
+    payload, dec, pos = "".join(parts), json.JSONDecoder(), 0
+    while True:
+        j = payload.find('"items":[', pos)
+        if j < 0:
+            return []
+        try:
+            items, _ = dec.raw_decode(payload[j + len('"items":'):])
+        except ValueError:
+            pos = j + 9
+            continue
+        if isinstance(items, list) and items and isinstance(items[0], dict) and "slug" in items[0]:
+            return items
+        pos = j + 9
+
+
+def mashina_car(it, src, keys):
+    """Объявление mashina.kg → машина в общем формате. keys — позиции таблицы цен, для которых открыта ссылка."""
+    ap, A = it.get("analytics_params") or {}, {a.get("slug"): a for a in it.get("attributes") or []}
+    usd = next((p.get("amount") for p in it.get("prices") or [] if p.get("currency") == "USD"), None) or ap.get("price_usd")
+    year = parse_year(ap.get("year") or (A.get("year") or {}).get("value_number"))
+    if not usd or not year or not it.get("slug"):
+        return None
+    if (it.get("availability") or "") in src.get("exclude_availability", []) or (ap.get("city") or "") in src.get("exclude_cities", []):
+        return None
+    tk = src["turnkey"]
+    price = round((usd * src.get("price_mult", 1) * tk["mult"] + tk["add_usd"]) / 10) * 10
+    title = " ".join(str(it.get("title") or "").split())[:120]
+    low = title.lower()
+    fuel = ("электро" if "electro" in low else "гибрид" if re.search(r"\dhyb|hybrid", low) else
+            "дизель" if re.search(r"\d\.\dd(?![a-z])", low) else "")
+    vol = (A.get("engine_volume") or {}).get("value_number")  # у гибридов бывает ёмкость батареи в кВт·ч: отсекаем
+    cc = round(vol * 1000) if isinstance(vol, (int, float)) and 0.6 <= vol <= 8.5 else None
+    km = (A.get("mileage") or {}).get("value_number")
+    steer = (A.get("steering_wheel") or {}).get("value_text") or ""
+    city = (A.get("city") or {}).get("value_text") or ""
+    notes = ([f"📍 Город: {city}"] if city else []) + ([f"🚘 Руль: {steer.lower()}"] if steer and steer.lower() != "слева" else [])
+    photos = [im.get("big") or im.get("medium") for im in it.get("images") or []]
+    return {
+        "src": src["name"], "id": f"{src['name']}:{it['id']}", "title": title, "make": "", "model": "",
+        "price": price, "year": year, "km": float(km) if isinstance(km, (int, float)) else None,
+        "url": f"https://mashina.kg/details/{it['slug']}", "photos": [p for p in photos if p][:CFG.get("max_photos", 10)],
+        "engine": engine_text(cc, fuel) or fuel, "engine_cc": cc, "fuel": fuel,
+        "transmission": (A.get("gearbox") or {}).get("value_text") or "", "drive": "", "color": "", "notes": notes,
+        "market_keys": [k for k in keys if k.rpartition("|")[2] == str(year)], "upload_photos": True,
+    }
+
+
+def mashina_links(src):
+    """Ссылки поиска из файла «ключ таблицы — ссылка» и из списка urls: {ссылка: [ключи таблицы]}."""
+    links = {}
+    path = src.get("links_file")
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            for ln in f:
+                key, sep, url = ln.strip().partition(" — ")
+                if not sep:
+                    key, url = "", ln.strip()
+                if url.startswith("http"):
+                    links.setdefault(url.strip(), [])
+                    if key.strip():
+                        links[url.strip()].append(key.strip())
+    for u in src.get("urls", []):
+        links.setdefault(u, [])
+    return links
+
+
+def fetch_mashina(src):
+    if not turnkey_ok(src):
+        raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
+    links = list(mashina_links(src).items())
+    if not links:
+        raise ValueError("нет ссылок поиска: проверьте links_file и urls в config.json")
+    random.Random(date.today().isoformat()).shuffle(links)  # каждый день другой порядок, если не хватит времени на все
+    if src.get("max_links"):
+        links = links[: int(src["max_links"])]
+    cars, st, t0 = {}, Counter(), time.time()
+    for n, (url, keys) in enumerate(links, 1):
+        if time.time() - t0 > src.get("time_budget_sec", 900):
+            print(f"   время на опрос вышло ({src.get('time_budget_sec', 900)} с): обработано {n - 1} из {len(links)} ссылок")
+            break
+        for page in range(1, int(src.get("pages", 1)) + 1):
+            u = re.sub(r"([?&]page=)\d+", rf"\g<1>{page}", url) if page > 1 else url
+            try:
+                r = requests.get(u, headers={"User-Agent": UA, "Accept-Language": "ru-RU,ru;q=0.9"}, timeout=30)
+                if r.status_code in (403, 429):
+                    print(f"   ⚠️ сайт ограничил доступ (HTTP {r.status_code}) на ссылке {n} из {len(links)}: остановка, получено {len(cars)}")
+                    return list(cars.values())
+                r.raise_for_status()
+                items = mashina_page_items(r.text)
+            except Exception as e:
+                st["ошибок"] += 1
+                if st["ошибок"] <= 3:
+                    print(f"   ⚠️ ссылка {n}: {str(e)[:120]}")
+                break
+            st["страниц"] += 1
+            for it in items:
+                c = mashina_car(it, src, keys)
+                if c:
+                    cars.setdefault(c["id"], c)
+                else:
+                    st["пропущено (в пути/нет цены)"] += 1
+            if len(items) < 20:  # последняя страница
+                break
+        time.sleep(src.get("delay_sec", 1.0))
+    print(f"   mashina.kg: страниц {st['страниц']}, ошибок {st['ошибок']}, пропущено {st['пропущено (в пути/нет цены)']}, уникальных машин {len(cars)}")
+    if not cars and st["ошибок"]:
+        raise ValueError("не удалось получить ни одной страницы: возможно, сайт блокирует запросы с серверов GitHub")
+    return list(cars.values())
 
 
 # ---------- фильтр, рынок, отбор ----------
@@ -356,6 +479,17 @@ def table_lookup(c):
         name, _, yr = k.partition("|")
         if isinstance(v, (int, float)) and v > 0:
             entries.append((tuple(tokens(name)), yr.strip(), v))
+    # машина найдена по ссылке поиска, привязанной к строкам таблицы: берём их; если строк несколько
+    # (поколения), выбираем самую конкретную, чьи слова есть в названии, иначе самую осторожную (низкую) цену
+    table = {k.lower(): v for k, v in MARKET.get("prices", {}).items() if isinstance(v, (int, float)) and v > 0}
+    cand = sorted(((k, table[k.lower()]) for k in c.get("market_keys", []) if k.lower() in table),
+                  key=lambda kv: -len(tokens(kv[0].partition("|")[0])))
+    if cand:
+        for k, v in cand:
+            it = iter(desc)
+            if all(t in it for t in tokens(k.partition("|")[0])):
+                return v
+        return min(v for _, v in cand)
     for want in (str(c["year"]), "*"):
         best = None
         for name, yr, price in entries:
@@ -494,29 +628,43 @@ def tg(method, files=None, **data):
     return r
 
 
+def to_jpeg(b):
+    """Telegram надёжно принимает JPEG: WEBP (так отдаёт mashina.kg) конвертируем."""
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        try:
+            from PIL import Image
+            out = io.BytesIO()
+            Image.open(io.BytesIO(b)).convert("RGB").save(out, "JPEG", quality=88)
+            return out.getvalue()
+        except Exception:
+            return b
+    return b
+
+
 def download(url):
     try:
         r = requests.get(url, timeout=30, headers={"User-Agent": UA})
         if r.ok and r.headers.get("content-type", "").startswith("image") and len(r.content) < 10_000_000:
-            return r.content
+            return to_jpeg(r.content)
     except requests.RequestException:
         pass
     return None
 
 
-def send_photos(photos, caption):
-    """Одно фото или альбом (2–10). Сначала по ссылкам, при отказе Telegram скачиваем и загружаем сами."""
+def send_photos(photos, caption, upload=False):
+    """Одно фото или альбом (2–10). Сначала по ссылкам, при отказе Telegram (или upload=True) скачиваем и загружаем сами."""
     cap = {"caption": caption, "parse_mode": "HTML"} if caption else {}
     if len(photos) == 1:
-        if tg("sendPhoto", photo=photos[0], **cap).ok:
+        if not upload and tg("sendPhoto", photo=photos[0], **cap).ok:
             return True
         b = download(photos[0])
         return bool(b) and tg("sendPhoto", files={"photo": ("p.jpg", b)}, **cap).ok
-    media = [{"type": "photo", "media": u} for u in photos]
-    if cap:
-        media[0].update(cap)
-    if tg("sendMediaGroup", media=json.dumps(media)).ok:
-        return True
+    if not upload:
+        media = [{"type": "photo", "media": u} for u in photos]
+        if cap:
+            media[0].update(cap)
+        if tg("sendMediaGroup", media=json.dumps(media)).ok:
+            return True
     files, media = {}, []
     for i, u in enumerate(photos):
         b = download(u)
@@ -536,7 +684,7 @@ def send(c):
     text = render(c)
     photos = c.get("photos", [])[:CFG.get("max_photos", 10)]
     caption = text if len(text) <= 1024 else None  # длинный текст уходит отдельным сообщением
-    posted = bool(photos) and send_photos(photos, caption)
+    posted = bool(photos) and send_photos(photos, caption, c.get("upload_photos", False))
     if posted and caption:
         return True
     return tg("sendMessage", text=text, parse_mode="HTML", disable_web_page_preview="true").ok
