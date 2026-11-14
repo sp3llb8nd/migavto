@@ -481,7 +481,7 @@
       "actor": "bovi~encar-scraper",
       "header": "Авто из Кореи",
       "flag": "🇰🇷",
-      "note": "🇰🇷 Авто из Южной Кореи (площадка Encar)",
+      "note": "🇰🇷 Авто из Южной Кореи",
       "input": {
         "carType": "all",
         "manufacturer": "현대",
@@ -543,7 +543,7 @@
       "actor": "bovi~encar-scraper",
       "header": "Авто из Кореи",
       "flag": "🇰🇷",
-      "note": "🇰🇷 Авто из Южной Кореи (площадка Encar)",
+      "note": "🇰🇷 Авто из Южной Кореи",
       "input": {
         "carType": "all",
         "manufacturer": "현대",
@@ -605,7 +605,7 @@
       "actor": "ahmed_jasarevic~copart-scraper",
       "header": "Авто из США",
       "flag": "🇺🇸",
-      "note": "🇺🇸 Авто из США (аукцион Copart)",
+      "note": "🇺🇸 Авто из США (аукцион)",
       "input": {
         "startUrls": [
           {
@@ -676,7 +676,7 @@
       ],
       "header": "Авто из Кыргызстана",
       "flag": "🇰🇬",
-      "note": "🇰🇬 Авто из Кыргызстана (площадка mashina.kg)",
+      "note": "🇰🇬 Авто из Кыргызстана",
       "turnkey": {
         "mult": 1.0,
         "add_usd": 2600,
