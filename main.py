@@ -339,7 +339,12 @@ def parse_year(v):
     if v is None or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return int(v) if 1900 <= v <= 2100 else None
+        v = int(v)
+        if 190001 <= v <= 210012 and 1 <= v % 100 <= 12:  # ГГГГММ (Encar: 202105 = май 2021)
+            return v // 100
+        return v if 1900 <= v <= 2100 else None
+    if re.fullmatch(r"\s*(?:19|20)\d{2}(0[1-9]|1[0-2])\s*", str(v)):
+        return int(str(v).strip()[:4])
     m = re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", str(v))
     return int(m.group(0)) if m else None
 
@@ -426,7 +431,9 @@ def normalize(raw, src):
         raise ValueError(f"цена {fmt(price_src)} {cur} похожа на заглушку площадки: объявление пропущено")
     tk = src["turnkey"]
     usd, rate = to_usd(price_src * src.get("price_mult", 1), cur, src)  # перевод в доллары: один раз
-    cc, fuel = engine_cc(get("engine_cc")), vmap(tr(txt("fuel")))
+    ccf = f.get("engine_cc")
+    cc = next((x for x in (engine_cc(pick(raw, p)) for p in ccf) if x), None) if isinstance(ccf, list) else engine_cc(get("engine_cc"))
+    fuel = vmap(tr(txt("fuel")))
     extra = customs_usd(year, cc, fuel, usd) if tk.get("customs") else 0
     price = round((usd * tk["mult"] + tk["add_usd"] + extra) / 10) * 10
     km = num(get("km"))
@@ -495,6 +502,10 @@ def read_entries(src):
     entries = []
     if src.get("entries_format", "links") == "links":
         by_url = {}
+        extra = src.get("links_file")  # дополнительные ссылки поиска (для Encar: www.encar.com)
+        if extra and os.path.exists(extra):
+            with open(extra, encoding="utf-8") as f2:
+                text += "\n" + f2.read()
         for ln in text.splitlines():
             key, sep, url = ln.strip().partition(" — ")
             if sep and url.startswith("http"):
@@ -502,21 +513,26 @@ def read_entries(src):
         for url, keys in by_url.items():
             entries.append({"label": keys[0], "brand": keys[0].split()[0], "keys": keys, "subs": {"url": url}})
     else:
-        names = src.get("names", {})  # английское название → как его пишет каталог Encar
+        names = src.get("names", {})  # название из файла → как его понимает поиск Encar («5 Series G30» → «5 Series»)
         groups = {}
         for brand, model, yf, yt, ctype in ENCAR_REC.findall(" ".join(text.split())):
-            g = groups.setdefault((brand, model.strip()), {"years": set(), "ctype": ctype})
+            model = model.strip()
+            mb, mm = names.get(brand, brand), names.get(model, model)
+            g = groups.setdefault((mb, mm), {"years": set(), "ctype": ctype, "brand": brand, "keys": set()})
             g["years"].update(range(int(yf), int(yt) + 1))
-        for (brand, model), g in groups.items():
+            g["keys"].update(f"{brand} {model}|{y}".lower() for y in range(int(yf), int(yt) + 1))
+        for (mb, mm), g in groups.items():
             ys = sorted(g["years"])
-            spans = [(ys[0], ys[-1], ys)] if src.get("group_years", True) else [(y, y, [y]) for y in ys]
-            for y0, y1, yy in spans:
-                entries.append({"label": f"{brand} {model} {y0}" + (f"–{y1}" if y1 != y0 else ""), "brand": brand,
-                                "keys": [f"{brand} {model}|{y}".lower() for y in yy],
-                                "subs": {"manufacturer": names.get(brand, brand), "model": names.get(model, model),
-                                         "yearFrom": y0, "yearTo": y1, "carType": g["ctype"]}})
+            spans = [(ys[0], ys[-1])] if src.get("group_years", True) else [(y, y) for y in ys]
+            for y0, y1 in spans:
+                keys = sorted(k for k in g["keys"] if y0 <= int(k.rpartition("|")[2]) <= y1)
+                entries.append({"label": f"{mb} {mm} {y0}" + (f"–{y1}" if y1 != y0 else ""), "brand": g["brand"], "keys": keys,
+                                "subs": {"manufacturer": mb, "model": mm, "yearFrom": y0, "yearTo": y1, "carType": g["ctype"]}})
     ob = {b.lower() for b in src.get("enabled_brands", [])}
-    return [e for e in entries if not ob or e["brand"].lower() in ob]
+    entries = [e for e in entries if not ob or e["brand"].lower() in ob or "url" in e["subs"]]
+    if src.get("links_file") and src.get("entries_format") != "links" and os.path.exists(src["links_file"]):
+        entries += read_entries(dict(src, entries_file=src["links_file"], entries_format="links", links_file=None))
+    return entries
 
 
 def pick_batch(entries, runs):
@@ -540,7 +556,8 @@ def fetch_apify_list(src):
             print(f"   время на опрос вышло ({src.get('time_budget_sec', 1500)} с): остальные запросы пропущены")
             break
         try:
-            raw = raw_items(src, e["subs"])
+            run_src = dict(src, input=src["input_links"]) if "url" in e["subs"] and src.get("input_links") else src
+            raw = raw_items(run_src, e["subs"])
         except Exception as ex:
             failed += 1
             print(f"   ⚠️ {src['name']} · {e['label']}: {str(ex)[:160]}")
@@ -587,6 +604,23 @@ def mashina_page_items(page_html):
         pos = j + 9
 
 
+def mashina_in_kg(it, src):
+    """Объявление с mashina.kg — машина, которая уже в Кыргызстане и в наличии. Перекупы с машинами в США, Китае,
+    Корее (город «США», «Китай», статус «В пути», фото аукционов) отсеиваются: они не из Кыргызстана."""
+    ap, A = it.get("analytics_params") or {}, {a.get("slug"): a for a in it.get("attributes") or []}
+    avail = (it.get("availability") or "").strip()
+    need = src.get("require_availability")
+    if need and avail not in need:
+        return False
+    if avail in src.get("exclude_availability", []):
+        return False
+    city = {str((A.get("city") or {}).get("value_text") or "").strip().lower(), str(ap.get("city") or "").strip().lower()}
+    if city & {c.lower() for c in src.get("exclude_cities", [])}:
+        return False
+    text = f"{it.get('title') or ''} {it.get('description') or ''}".lower()
+    return not any(w.lower() in text for w in src.get("exclude_words", []))
+
+
 def mashina_car(it, src, keys):
     """Объявление mashina.kg → машина в общем формате. keys — позиции таблицы цен, для которых открыта ссылка."""
     ap, A = it.get("analytics_params") or {}, {a.get("slug"): a for a in it.get("attributes") or []}
@@ -594,7 +628,7 @@ def mashina_car(it, src, keys):
     year = parse_year(ap.get("year") or (A.get("year") or {}).get("value_number"))
     if not usd or not year or not it.get("slug"):
         return None
-    if (it.get("availability") or "") in src.get("exclude_availability", []) or (ap.get("city") or "") in src.get("exclude_cities", []):
+    if not mashina_in_kg(it, src):
         return None
     tk = src["turnkey"]
     price = round((usd * src.get("price_mult", 1) * tk["mult"] + tk["add_usd"]) / 10) * 10

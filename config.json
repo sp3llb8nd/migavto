@@ -500,106 +500,112 @@
     "수소": "водород",
     "LPG": "LPG",
     "오토": "автомат",
-    "수동": "механика"
+    "수동": "механика",
+    "세미오토": "робот",
+    "CVT": "вариатор"
   },
   "sources": [
     {
       "name": "Encar",
       "enabled": true,
       "type": "apify_list",
-      "actor": "bovi~encar-scraper",
+      "actor": "prodiger~encar-listings-scraper",
+      "country": "KR",
       "entries_file": "MIGAVTO_Encar_227_search_params.txt",
       "entries_format": "encar_params",
+      "links_file": "encar_links.txt",
       "enabled_brands": [
         "Hyundai",
-        "Kia"
+        "Kia",
+        "BMW",
+        "Mercedes-Benz",
+        "Audi",
+        "Volkswagen",
+        "Toyota",
+        "Lexus",
+        "Volvo"
       ],
       "group_years": true,
       "runs_per_day": 3,
       "time_budget_sec": 1500,
-      "input": {
-        "carType": "{carType}",
-        "manufacturer": "{manufacturer}",
-        "model": "{model}",
-        "yearFrom": "{yearFrom}",
-        "yearTo": "{yearTo}",
-        "sortBy": "ModifiedDate",
-        "maxResults": 6,
-        "proxyConfiguration": {
-          "useApifyProxy": true,
-          "apifyProxyGroups": [
-            "RESIDENTIAL"
-          ]
-        }
-      },
       "names": {
-        "Hyundai": "현대",
-        "Kia": "기아",
-        "Palisade": "팰리세이드",
-        "Tucson": "투싼",
-        "Santa Fe": "싼타페",
-        "Sonata": "쏘나타",
-        "Kona": "코나",
-        "Sportage": "스포티지",
-        "Sorento": "쏘렌토",
-        "K5": "K5",
-        "Rio": "프라이드",
-        "Seltos": "셀토스",
-        "Carnival": "카니발"
+        "5 Series G30": "5 Series",
+        "3 Series G20": "3 Series",
+        "3 Series F30": "3 Series",
+        "X5 F15": "X5",
+        "A6 C7": "A6",
+        "A6 C8": "A6",
+        "Land Cruiser 200": "Land Cruiser",
+        "Land Cruiser 300": "Land Cruiser"
+      },
+      "input": {
+        "carType": "all",
+        "manufacturer": "{manufacturer}",
+        "modelGroup": "{model}",
+        "yearMin": "{yearFrom}",
+        "yearMax": "{yearTo}",
+        "sortBy": "ModifiedDate",
+        "scrapeDetails": false,
+        "maxItems": 6
+      },
+      "input_links": {
+        "searchUrls": [
+          "{url}"
+        ],
+        "sortBy": "ModifiedDate",
+        "scrapeDetails": false,
+        "maxItems": 6
       },
       "items_path": "",
+      "price_currency": "KRW",
       "price_mult": 1,
+      "min_price": 1000000,
+      "invalid_prices": [
+        99990000
+      ],
       "photo_seq": true,
       "turnkey": {
         "mult": 1.0,
         "add_usd": 5000,
         "customs": true
       },
+      "price_mode": "turnkey",
+      "show_source_price": false,
+      "source_price_label": "Цена в Корее:",
+      "source_currency_sign": "₩",
       "fields": {
-        "id": "carId",
+        "id": "id",
         "title": [
           "manufacturer",
           "model",
           "badge",
-          "badgeDetail"
+          "badgeDetail",
+          "trim"
         ],
         "make": "manufacturer",
         "model": "model",
-        "price": "priceKrw",
-        "year": "yearMonth",
-        "km": "mileageKm",
+        "price": "price",
+        "price_alt": "priceManwon",
+        "price_alt_mult": 10000,
+        "year": "year",
+        "km": "mileage",
         "url": "url",
-        "photos": "imageUrl",
-        "photo_count": "photoCount",
+        "photos": "photoUrls",
+        "photo": "mainPhotoUrl",
+        "photo_count": "",
         "engine_cc": [
+          "displacement",
           "badge",
-          "badgeDetail"
+          "badgeDetail",
+          "trim"
         ],
         "fuel": "fuelType",
         "engine": "",
-        "transmission": "",
+        "transmission": "transmission",
         "drive": "",
         "color": "",
-        "notes": [
-          {
-            "icon": "✅",
-            "text": "Есть диагностика авто",
-            "path": "hasInspection"
-          }
-        ],
-        "price_alt": "priceManwon",
-        "price_alt_mult": 10000
-      },
-      "country": "KR",
-      "price_currency": "KRW",
-      "min_price": 1000000,
-      "invalid_prices": [
-        99990000
-      ],
-      "price_mode": "turnkey",
-      "show_source_price": false,
-      "source_price_label": "Цена в Корее:",
-      "source_currency_sign": "₩"
+        "notes": []
+      }
     },
     {
       "name": "Copart",
@@ -685,7 +691,31 @@
         "В пути"
       ],
       "exclude_cities": [
-        "kitay"
+        "США",
+        "ssha",
+        "usa",
+        "Китай",
+        "kitay",
+        "Корея",
+        "Южная Корея",
+        "koreya",
+        "Япония",
+        "yaponiya",
+        "ОАЭ",
+        "oae",
+        "Дубай",
+        "Грузия",
+        "gruziya",
+        "Германия",
+        "germaniya",
+        "Европа",
+        "Литва",
+        "Польша",
+        "Канада",
+        "Армения",
+        "Россия",
+        "Казахстан",
+        "Беларусь"
       ],
       "turnkey": {
         "mult": 1.0,
@@ -693,7 +723,15 @@
         "customs": false
       },
       "country": "KG",
-      "price_mode": "turnkey"
+      "price_mode": "turnkey",
+      "require_availability": [
+        "В наличии"
+      ],
+      "exclude_words": [
+        "copart",
+        "iaai",
+        "manheim"
+      ]
     }
   ],
   "value_map": {
