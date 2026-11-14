@@ -8,6 +8,7 @@ python main.py          боевой режим (порция зависит о�
 python main.py --dry    показать выбор в логе, ничего не отправлять и не сохранять
 python main.py --demo   отправить тестовые «ДЕМО»-машины (площадки не нужны, состояние не пишется)
 """
+import glob
 import html
 import io
 import json
@@ -32,6 +33,8 @@ TOKEN = os.environ.get("TG_TOKEN", "")
 CHAT = os.environ.get("TG_CHAT", "")
 APIFY = os.environ.get("APIFY_TOKEN", "")
 DEMO, DRY = "--demo" in sys.argv, "--dry" in sys.argv
+PREFETCH = "--prefetch" in sys.argv
+POOL_VERSION = 2  # меняется при изменении расчёта цен: запас дня, собранный старым кодом, пересобирается
 UA = "Mozilla/5.0 (compatible; cars-bot)"
 HANGUL = r"[\uac00-\ud7a3]+"
 UNKNOWN_KO = Counter()
@@ -42,9 +45,14 @@ MARKET = CFG.get("market", {})
 STATE_FILE = "state.json"
 
 
+DEMO_COUNTRY = {"Encar": "KR", "Copart": "US", "mashina.kg": "KG"}
+
+
 def _demo(src, i, title, make, model, year, km, price, market, engine, notes):
     return {
-        "src": src, "id": f"demo:{src}:{i}", "title": title, "make": make, "model": model,
+        "src": src, "id": f"demo:{src}:{i}", "title": title, "make": make, "model": model, "country": DEMO_COUNTRY[src],
+        "price_usd": {"Encar": price - 9000, "Copart": price - 8000, "mashina.kg": price - 2600}[src],
+        "price_src": None, "currency_src": "USD", "rate": None,
         "year": year, "km": km, "price": price, "market": market, "url": "https://example.com",
         "photos": [f"https://picsum.photos/seed/{src}{i}{n}/800/600" for n in range(3)],
         "engine": engine, "transmission": "автомат", "drive": "передний", "color": "чёрный", "notes": notes,
@@ -58,8 +66,7 @@ DEMO_CARS = [
     _demo("Copart", 1, "ДЕМО Toyota Camry SE", "Toyota", "Camry", 2020, 68000, 14200, 17000, "2.5 л, бензин",
           ["💥 Повреждение: FRONT END"]),
     _demo("Copart", 2, "ДЕМО Honda Accord Sport", "Honda", "Accord", 2019, 90000, 12900, 15000, "1.5 л, бензин", []),
-    _demo("mashina.kg", 1, "ДЕМО Toyota RAV4 Adventure", "Toyota", "RAV4", 2020, 75000, 21500, 25000, "2.5 л",
-          ["📍 Город: Бишкек"]),
+    _demo("mashina.kg", 1, "ДЕМО Toyota RAV4 Adventure", "Toyota", "RAV4", 2020, 75000, 21500, 25000, "2.5 л", []),
     _demo("mashina.kg", 2, "ДЕМО Lexus RX 350", "Lexus", "RX 350", 2019, 82000, 27900, 31500, "3.5 л", []),
 ]
 
@@ -96,8 +103,39 @@ def num(v):
         return None
 
 
+NBSP = "\u00a0"  # неразрывный пробел: Telegram не переносит строку внутри «21 000 $»
+
+
 def fmt(x):
-    return f"{x:,.0f}".replace(",", " ")
+    return f"{x:,.0f}".replace(",", NBSP)
+
+
+def money(x, cur="$"):
+    """Сумма с валютой одним неразрывным блоком: 17 600 $."""
+    return f"{fmt(x)}{NBSP}{cur}"
+
+
+def parse_number(v):
+    """Число из ячейки таблицы или поля площадки: 1450, «1 450», «1450,5», «18,900,000», «18 900 000 ₩».
+    Возвращает None для пустых и нечисловых значений, вместо ошибки."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = re.sub(r"[\s\u00a0\u202f']", "", str(v))
+    t = re.sub(r"[^0-9,.\-]", "", t)
+    if not re.search(r"\d", t):
+        return None
+    if "," in t and "." in t:  # 18,900,000.50 или 18.900.000,50
+        t = t.replace(",", "") if t.rfind(".") > t.rfind(",") else t.replace(".", "").replace(",", ".")
+    elif "," in t:
+        t = t.replace(",", "") if re.fullmatch(r"-?\d{1,3}(,\d{3})+", t) else t.replace(",", ".")
+    elif t.count(".") > 1:
+        t = t.replace(".", "")
+    try:
+        return float(t)
+    except ValueError:
+        return None
 
 
 def now_local():
@@ -110,6 +148,119 @@ def now_local():
 
 def src_cfg(name):
     return next((s for s in CFG["sources"] if s["name"] == name), {})
+
+
+_WARNED = set()
+
+
+def country_of(c):
+    """Страна объявления: по источнику (площадке), откуда оно пришло. Марка машины не учитывается никогда.
+    Порядок: страна, записанная в объявлении при разборе → страна площадки в config.json → «неизвестно»."""
+    code = (c.get("country") or src_cfg(c.get("src")).get("country") or "").upper()
+    if code in CFG.get("countries", {}):
+        return code
+    if c.get("src") not in _WARNED:
+        _WARNED.add(c.get("src"))
+        print(f"⚠️ Площадка «{c.get('src')}»: страна не задана или её нет в config.json → countries; флаг не ставится")
+    return ""
+
+
+def country_info(c):
+    info = CFG.get("countries", {}).get(country_of(c))
+    return info or CFG.get("unknown_country", {"header": "Авто под заказ", "flag": ""})
+
+
+# ---------- курс корейской воны из Google-таблицы ----------
+RATES = {}  # заполняется один раз за запуск: {"KRW": {"working": 1450.0, "real": 1330.0, ...}}
+
+
+def _norm_label(s):
+    return " ".join(str(s or "").lower().replace("ё", "е").split())
+
+
+def sheet_rows(rc):
+    """Таблица как список строк (CSV). Нужен доступ «Все, у кого есть ссылка — Читатель»."""
+    import csv
+    base = f"https://docs.google.com/spreadsheets/d/{rc['sheet_id']}"
+    gid = str(rc.get("gid", "0"))
+    errors = []
+    for url in (f"{base}/export?format=csv&gid={gid}", f"{base}/gviz/tq?tqx=out:csv&gid={gid}"):
+        try:
+            r = requests.get(url, timeout=30, headers={"User-Agent": UA})
+        except requests.RequestException as e:
+            errors.append(str(e)[:120])
+            continue
+        ctype = r.headers.get("content-type", "")
+        if r.ok and "html" not in ctype.lower():
+            r.encoding = "utf-8"
+            return list(csv.reader(io.StringIO(r.text)))
+        errors.append(f"HTTP {r.status_code}, {ctype or 'нет типа'}"
+                      + (" (похоже на страницу входа: таблица не открыта по ссылке)" if "html" in ctype.lower() else ""))
+    raise ValueError("не удалось прочитать Google-таблицу: " + "; ".join(errors))
+
+
+def sheet_value(rows, label):
+    """Число рядом с подписью: справа в той же строке, иначе ниже в том же столбце (до 5 строк)."""
+    want = _norm_label(label)
+    for i, row in enumerate(rows):
+        for j, cell in enumerate(row):
+            if want and want in _norm_label(cell) and parse_number(cell) is None:
+                for v in row[j + 1:]:
+                    if parse_number(v) is not None:
+                        return parse_number(v)
+                for k in range(i + 1, min(i + 6, len(rows))):
+                    if j < len(rows[k]) and parse_number(rows[k][j]) is not None:
+                        return parse_number(rows[k][j])
+    return None
+
+
+def load_krw_rate(state):
+    """Рабочий и реальный курс из таблицы. Если таблица недоступна: последний прочитанный из неё курс,
+    но не старше krw_rates.max_cache_days. Иначе None, и машины Encar не публикуются."""
+    rc = CFG.get("krw_rates") or {}
+    if todo(rc.get("sheet_id")):
+        print("⚠️ Курс вон: в config.json не задан krw_rates.sheet_id")
+        return None
+    lo, hi = rc.get("min", 500), rc.get("max", 3000)
+    try:
+        rows = sheet_rows(rc)
+        work, real = sheet_value(rows, rc["working_label"]), sheet_value(rows, rc.get("real_label", ""))
+        if work is None:
+            raise ValueError(f"в таблице не найдена подпись «{rc['working_label']}» с числом рядом")
+        if not lo <= work <= hi:
+            raise ValueError(f"рабочий курс {work} вне допустимого диапазона {lo}–{hi} вон за доллар")
+        # самопроверка формулы на примере из самой таблицы: цена для клиента = цена в вонах / рабочий курс
+        p, client = sheet_value(rows, rc.get("price_label", "")), sheet_value(rows, rc.get("client_label", ""))
+        if p and client:
+            if abs(p / work - client) > max(1.0, client * 0.005):
+                raise ValueError(f"формула не сходится с таблицей: {p:.0f} / {work} = {p / work:.2f}, а в таблице {client:.2f}")
+            check = f"сверка с таблицей: {fmt(p)} ₩ / {work:g} = {p / work:.2f} $ ✓"
+        else:
+            check = "сверка формулы не выполнена: в таблице не найдены цена в вонах и цена для клиента"
+        rate = {"working": work, "real": real, "day": date.today().isoformat(), "source": "таблица"}
+        state["krw_rate"] = rate
+        print(f"Курс вон из таблицы: рабочий {work:g}" + (f", реальный {real:g}" if real else "") + f" ({check})")
+        return rate
+    except Exception as e:
+        cached = state.get("krw_rate")
+        if cached and (date.today() - date.fromisoformat(cached["day"])).days <= rc.get("max_cache_days", 3):
+            print(f"⚠️ Курс вон: {e}. Использую последний курс из таблицы от {cached['day']}: {cached['working']:g}")
+            return dict(cached, source="кэш")
+        print(f"⚠️ Курс вон не получен: {e}. Машины из Кореи в этом запуске не публикуются")
+        return None
+
+
+def to_usd(amount, currency, src):
+    """Единственное место перевода валюты площадки в доллары. Вызывается ровно один раз на объявление."""
+    cur = (currency or "USD").upper()
+    if cur == "USD":
+        return amount, None
+    if cur == "KRW":
+        rate = (RATES.get("KRW") or {}).get("working")
+        if not rate:
+            raise ValueError("нет рабочего курса вон (Google-таблица недоступна): цена не публикуется")
+        return amount / rate, rate
+    raise ValueError(f"валюта {cur} у площадки «{src['name']}» не поддерживается")
 
 
 # ---------- состояние ----------
@@ -132,6 +283,8 @@ def save_state(state):
 # ---------- получение и нормализация данных ----------
 def subst(x, subs, enc=False):
     if isinstance(x, str):
+        if not enc and x.startswith("{") and x.endswith("}") and x[1:-1] in subs:
+            return subs[x[1:-1]]  # весь текст = один плейсхолдер: сохраняем тип (год остаётся числом)
         for k, v in subs.items():
             x = x.replace("{" + k + "}", quote(str(v)) if enc else str(v))
         return x
@@ -144,7 +297,7 @@ def subst(x, subs, enc=False):
 
 def raw_items(src, subs=None):
     subs = subs or {}
-    if src["type"] == "apify":
+    if src["type"] in ("apify", "apify_list"):
         r = requests.post(f"https://api.apify.com/v2/acts/{src['actor']}/run-sync-get-dataset-items",
                           params={"token": APIFY}, json=subst(src.get("input", {}), subs), timeout=300)
     else:
@@ -169,6 +322,13 @@ def tr(s):
     for w in re.findall(HANGUL, s):
         UNKNOWN_KO[w] += 1
     return " ".join(re.sub(HANGUL, " ", s).split())
+
+
+def vmap(v):
+    """Перевод значения характеристики целиком (GAS → бензин, AUTOMATIC → автомат) по config.json → value_map.
+    Только точное совпадение всего значения: название модели и комплектации не затрагиваются."""
+    t = " ".join(str(v or "").split())
+    return CFG.get("value_map", {}).get(t.upper(), t)
 
 
 def nice_case(s):
@@ -247,18 +407,28 @@ def normalize(raw, src):
         return pick(raw, p) if isinstance(p, str) else None
 
     txt = lambda k: "" if todo(get(k)) else str(get(k))
-    missing = [k for k in ("id", "title", "price", "year", "url") if todo(get(k))]
+    missing = [k for k in ("id", "title", "year", "url") if todo(get(k))] + (["price"] if todo(f.get("price")) else [])
     if missing:
         raise KeyError(f"в config.json для «{src['name']}» не настроены поля {missing}; "
                        f"в ответе площадки есть поля: {list(raw)[:30]}")
-    price_src, year = num(get("price")), parse_year(get("year"))
-    if not price_src or price_src <= 0 or not year:
-        raise ValueError("цена или год не распознаны (у лотов Copart без ставок цена 0: такие пропускаются)")
+    price_src, year = parse_number(get("price")), parse_year(get("year"))
+    if (not price_src or price_src <= 0) and f.get("price_alt"):  # запасное поле, например цена в манвонах
+        alt = parse_number(pick(raw, f["price_alt"]))
+        price_src = alt * f.get("price_alt_mult", 1) if alt else None
+    cur = (src.get("price_currency") or "USD").upper()
+    if cur != "USD" and src.get("price_mult", 1) != 1:
+        raise ValueError(f"в config.json у «{src['name']}» одновременно price_currency={cur} и price_mult: двойная конвертация")
+    if not year:
+        raise ValueError("год не распознан")
+    if not price_src or price_src <= 0:
+        raise ValueError("нет цены (у лотов Copart без ставок цена 0): объявление пропущено")
+    if price_src in (src.get("invalid_prices") or []) or price_src < src.get("min_price", 0):
+        raise ValueError(f"цена {fmt(price_src)} {cur} похожа на заглушку площадки: объявление пропущено")
     tk = src["turnkey"]
-    base = price_src * src.get("price_mult", 1)
-    cc, fuel = engine_cc(get("engine_cc")), tr(txt("fuel"))
-    extra = customs_usd(year, cc, fuel, base) if tk.get("customs") else 0
-    price = round((base * tk["mult"] + tk["add_usd"] + extra) / 10) * 10
+    usd, rate = to_usd(price_src * src.get("price_mult", 1), cur, src)  # перевод в доллары: один раз
+    cc, fuel = engine_cc(get("engine_cc")), vmap(tr(txt("fuel")))
+    extra = customs_usd(year, cc, fuel, usd) if tk.get("customs") else 0
+    price = round((usd * tk["mult"] + tk["add_usd"] + extra) / 10) * 10
     km = num(get("km"))
     ph = get("photos") or get("photo")
     if isinstance(ph, str):
@@ -274,21 +444,26 @@ def normalize(raw, src):
         v = pick(raw, n.get("path"))
         if v in (None, "", 0, "0", False, [], {}):
             continue
-        notes.append(f"{n.get('icon', '•')} " + str(n.get("text", "")).replace("{}", tr(v) if isinstance(v, str) else str(v)))
+        notes.append(f"{n.get('icon', '•')} " + str(n.get("text", "")).replace("{}", vmap(tr(v)) if isinstance(v, str) else str(v)))
     title = tr(txt("title"))[:120]
     return {
         "src": src["name"], "id": f"{src['name']}:{get('id')}",
         "title": nice_case(title) if src.get("nice_case") else title,
         "make": tr(txt("make")), "model": tr(txt("model")), "price": price, "year": year,
+        "price_src": price_src, "currency_src": cur, "rate": rate, "price_usd": round(usd),
+        "country": src.get("country", ""),
         "km": None if km is None else km * src.get("km_mult", 1), "url": txt("url"), "photos": photos,
         "engine": tr(txt("engine")) or engine_text(cc, fuel), "engine_cc": cc, "fuel": fuel,
-        "transmission": tr(txt("transmission")), "drive": tr(txt("drive")), "color": tr(txt("color")), "notes": notes,
+        "transmission": vmap(tr(txt("transmission"))), "drive": vmap(tr(txt("drive"))), "color": vmap(tr(txt("color"))),
+        "notes": notes,
     }
 
 
 def fetch(src):
     if src["type"] == "mashina_web":
         return fetch_mashina(src)
+    if src["type"] == "apify_list":
+        return fetch_apify_list(src)
     if not turnkey_ok(src):
         raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
     cars, errs, first_err = [], Counter(), None
@@ -303,6 +478,89 @@ def fetch(src):
     for msg, n in errs.most_common(3):
         print(f"   пропущено {n} шт. ({src['name']}): {msg}")
     return cars
+
+
+# ---------- список запросов (Copart, Encar) через Apify, по кругу ----------
+ENCAR_REC = re.compile(r"(?<![\w|-])([A-Za-z][A-Za-z\-]*) \| ([^|]+?) \| (\d{4}) \| (\d{4}) \| (\w+) \| ModifiedDate")
+
+
+def read_entries(src):
+    """Запросы из файла. links: строки «ключ таблицы — ссылка» (Copart).
+    encar_params: «слитный» список «Марка | Модель | год | год | тип | сортировка» (Encar)."""
+    path = src.get("entries_file")
+    if not (path and os.path.exists(path)):
+        raise ValueError(f"не найден файл {path}: загрузите его в корень репозитория (рядом с main.py)")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    entries = []
+    if src.get("entries_format", "links") == "links":
+        by_url = {}
+        for ln in text.splitlines():
+            key, sep, url = ln.strip().partition(" — ")
+            if sep and url.startswith("http"):
+                by_url.setdefault(url.strip(), []).append(key.strip())
+        for url, keys in by_url.items():
+            entries.append({"label": keys[0], "brand": keys[0].split()[0], "keys": keys, "subs": {"url": url}})
+    else:
+        names = src.get("names", {})  # английское название → как его пишет каталог Encar
+        groups = {}
+        for brand, model, yf, yt, ctype in ENCAR_REC.findall(" ".join(text.split())):
+            g = groups.setdefault((brand, model.strip()), {"years": set(), "ctype": ctype})
+            g["years"].update(range(int(yf), int(yt) + 1))
+        for (brand, model), g in groups.items():
+            ys = sorted(g["years"])
+            spans = [(ys[0], ys[-1], ys)] if src.get("group_years", True) else [(y, y, [y]) for y in ys]
+            for y0, y1, yy in spans:
+                entries.append({"label": f"{brand} {model} {y0}" + (f"–{y1}" if y1 != y0 else ""), "brand": brand,
+                                "keys": [f"{brand} {model}|{y}".lower() for y in yy],
+                                "subs": {"manufacturer": names.get(brand, brand), "model": names.get(model, model),
+                                         "yearFrom": y0, "yearTo": y1, "carType": g["ctype"]}})
+    ob = {b.lower() for b in src.get("enabled_brands", [])}
+    return [e for e in entries if not ob or e["brand"].lower() in ob]
+
+
+def pick_batch(entries, runs):
+    """Сегодняшняя порция запросов: по кругу, в зависимости от даты (без хранения состояния)."""
+    n = len(entries)
+    start = (date.today().toordinal() * runs) % n if n else 0
+    return [entries[(start + i) % n] for i in range(min(runs, n))]
+
+
+def fetch_apify_list(src):
+    if not turnkey_ok(src):
+        raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
+    entries = read_entries(src)
+    if not entries:
+        raise ValueError("в файле нет подходящих запросов (проверьте enabled_brands)")
+    batch = pick_batch(entries, int(src.get("runs_per_day", 3)))
+    print(f"   {src['name']}: сегодня {len(batch)} из {len(entries)} запросов: " + "; ".join(e["label"] for e in batch))
+    cars, errs, failed, t0 = {}, Counter(), 0, time.time()
+    for e in batch:
+        if time.time() - t0 > src.get("time_budget_sec", 1500):
+            print(f"   время на опрос вышло ({src.get('time_budget_sec', 1500)} с): остальные запросы пропущены")
+            break
+        try:
+            raw = raw_items(src, e["subs"])
+        except Exception as ex:
+            failed += 1
+            print(f"   ⚠️ {src['name']} · {e['label']}: {str(ex)[:160]}")
+            continue
+        got = 0
+        for r in raw:
+            try:
+                c = normalize(r, src)
+            except (KeyError, TypeError, ValueError) as ex:
+                errs[str(ex)[:140]] += 1
+                continue
+            c["market_keys"] = [k for k in e["keys"] if k.rpartition("|")[2] == str(c["year"])]
+            cars.setdefault(c["id"], c)
+            got += 1
+        print(f"   {src['name']} · {e['label']}: получено {len(raw)}, принято {got}")
+    for msg, n in errs.most_common(3):
+        print(f"   пропущено {n} шт. ({src['name']}): {msg}")
+    if not cars and failed == len(batch):
+        raise ValueError("ни один запрос не отработал: проверьте APIFY_TOKEN, баланс Apify и вход актора")
+    return list(cars.values())
 
 
 # ---------- прямой парсер mashina.kg (без Apify) ----------
@@ -348,12 +606,12 @@ def mashina_car(it, src, keys):
     cc = round(vol * 1000) if isinstance(vol, (int, float)) and 0.6 <= vol <= 8.5 else None
     km = (A.get("mileage") or {}).get("value_number")
     steer = (A.get("steering_wheel") or {}).get("value_text") or ""
-    city = (A.get("city") or {}).get("value_text") or ""
-    notes = ([f"📍 Город: {city}"] if city else []) + ([f"🚘 Руль: {steer.lower()}"] if steer and steer.lower() != "слева" else [])
+    notes = [f"🚘 Руль: {steer.lower()}"] if steer and steer.lower() != "слева" else []
     photos = [im.get("big") or im.get("medium") for im in it.get("images") or []]
     return {
         "src": src["name"], "id": f"{src['name']}:{it['id']}", "title": title, "make": "", "model": "",
-        "price": price, "year": year, "km": float(km) if isinstance(km, (int, float)) else None,
+        "price": price, "year": year, "price_src": usd, "currency_src": "USD", "rate": None, "price_usd": round(usd),
+        "country": src.get("country", ""), "km": float(km) if isinstance(km, (int, float)) else None,
         "url": f"https://mashina.kg/details/{it['slug']}", "photos": [p for p in photos if p][:CFG.get("max_photos", 10)],
         "engine": engine_text(cc, fuel) or fuel, "engine_cc": cc, "fuel": fuel,
         "transmission": (A.get("gearbox") or {}).get("value_text") or "", "drive": "", "color": "", "notes": notes,
@@ -365,6 +623,9 @@ def mashina_links(src):
     """Ссылки поиска из файла «ключ таблицы — ссылка» и из списка urls: {ссылка: [ключи таблицы]}."""
     links = {}
     path = src.get("links_file")
+    if not (path and os.path.exists(path)):  # файл загружен под другим именем (например, «… (1).txt»)
+        found = sorted(glob.glob("*links*.txt"))
+        path = found[0] if found else None
     if path and os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             for ln in f:
@@ -385,7 +646,7 @@ def fetch_mashina(src):
         raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
     links = list(mashina_links(src).items())
     if not links:
-        raise ValueError("нет ссылок поиска: проверьте links_file и urls в config.json")
+        raise ValueError("нет ссылок поиска: загрузите файл mashina_kg_search_links_228.txt в корень репозитория (рядом с main.py) или впишите ссылки в urls в config.json")
     random.Random(date.today().isoformat()).shuffle(links)  # каждый день другой порядок, если не хватит времени на все
     if src.get("max_links"):
         links = links[: int(src["max_links"])]
@@ -425,9 +686,18 @@ def fetch_mashina(src):
 
 
 # ---------- фильтр, рынок, отбор ----------
+def price_ok(c):
+    """Можно ли публиковать цену: «под ключ» посчитана, а для аукционных площадок есть цена аукциона."""
+    if not c.get("price") or c["price"] <= 0:
+        return False
+    if src_cfg(c["src"]).get("price_mode") == "auction":
+        return bool(c.get("price_usd")) and c["price_usd"] > 0 and (c.get("currency_src") or "USD") == "USD"
+    return True
+
+
 def good(c):
     f = CFG["filters"]  # price_usd_max — предельная цена ПОД КЛЮЧ
-    return (c["year"] >= f.get("year_min", 0)
+    return (price_ok(c) and c["year"] >= f.get("year_min", 0)
             and c["price"] <= f.get("price_usd_max", 10 ** 12)
             and (c["km"] is None or c["km"] <= f.get("km_max", 10 ** 12)))
 
@@ -590,17 +860,31 @@ def render(c):
     notes = ""
     if c.get("notes"):
         notes = "\n".join([CFG.get("notes_header", "По предварительной информации:")] + [html.escape(n) for n in c["notes"]])
-    mline = ""
-    if c.get("market") and c.get("disc") and c["disc"] > 0:
-        mline = (MARKET.get("line", "📊 Средняя цена на av.by: ~{market}$ · выгода {disc}%")
-                 .replace("{market}", fmt(c["market"])).replace("{disc}", str(c["disc"])))
+    ci = country_info(c)
+    mode = s.get("price_mode", "turnkey")
+    if mode == "auction":  # Copart: цена аукциона, а не «под ключ»
+        if not price_ok(c):
+            return None
+        price_lines = [f"{s.get('price_label', 'Цена на аукционе:')} ❤️ {money(c['price_usd'])}", s.get("price_note", "")]
+    else:
+        price_lines = [f"{s.get('price_label', 'Цена:')} ❤️ {money(c['price'])}", s.get("price_note", "под ключ до Минска")]
+    if s.get("show_source_price") and c.get("currency_src") not in (None, "USD") and c.get("price_src"):
+        price_lines.append(f"{s.get('source_price_label', 'Цена на площадке:')} {money(c['price_src'], s.get('source_currency_sign', c['currency_src']))}")
+    market = []
+    if s.get("market_line", True) and c.get("market") and c.get("disc") and c["disc"] > 0:
+        market = [f"📊 Средняя на av.by: ≈{NBSP}{money(c['market'])}", f"✅ Выгода: {c['disc']}{NBSP}%"]
     vals = {
-        "header": esc(s.get("header")), "flags": (s.get("flag") or "") * int(s.get("flag_count", 10)),
+        "header": esc(ci.get("header") or s.get("header")),
+        "flags": (ci.get("flag") or "") * int(ci.get("flag_count", CFG.get("flag_count", 10))),
         "note": esc(s.get("note")),
-        "title": esc(c["title"]), "year": esc(c["year"]), "price_turnkey": fmt(c["price"]),
-        "mileage": fmt(c["km"]) if c.get("km") is not None else "", "engine": esc(c.get("engine")),
+        "title": esc(c["title"]), "year": esc(c["year"]),
+        "price_block": "\n".join(html.escape(x) for x in price_lines if x),
+        "price_turnkey": money(c["price"]) if mode != "auction" else "",
+        "mileage": f"{fmt(c['km'])}{NBSP}км" if c.get("km") is not None else "",
+        "engine": esc(str(c.get("engine") or "").replace(" л", NBSP + "л")),
         "transmission": esc(c.get("transmission")), "drive": esc(c.get("drive")), "color": esc(c.get("color")),
-        "notes_block": notes, "market_line": html.escape(mline), "order_link": esc(CFG.get("order_link")),
+        "notes_block": notes, "market_block": "\n".join(html.escape(x) for x in market),
+        "market_line": html.escape(market[0]) if market else "", "order_link": esc(CFG.get("order_link")),
     }
     out = []
     for line in s.get("template") or CFG["template"]:
@@ -682,6 +966,9 @@ def send_photos(photos, caption, upload=False):
 
 def send(c):
     text = render(c)
+    if not text:
+        print(f"⚠️ Пост не собран (нет корректной цены): {c.get('title')}")
+        return False
     photos = c.get("photos", [])[:CFG.get("max_photos", 10)]
     caption = text if len(text) <= 1024 else None  # длинный текст уходит отдельным сообщением
     posted = bool(photos) and send_photos(photos, caption, c.get("upload_photos", False))
@@ -722,10 +1009,14 @@ def main():
     seen = set(state["seen"])
 
     pool = state.get("pool") or {}
-    if not DEMO and pool.get("day") == today and pool.get("fetched"):
+    if not DEMO and pool.get("day") == today and pool.get("fetched") and pool.get("v") == POOL_VERSION:
         cands = [c for c in pool.get("cars", []) if c["id"] not in seen]
         print(f"Площадки сегодня уже опрошены, в запасе {len(cands)} подходящих машин")
+        if PREFETCH:
+            return
     else:
+        if not DEMO and any(s.get("enabled") and (s.get("price_currency") or "USD").upper() == "KRW" for s in CFG["sources"]):
+            RATES["KRW"] = load_krw_rate(state)
         fetched = {c["id"]: dict(c) for c in DEMO_CARS} if DEMO else collect()
         if not fetched:
             print("Нет данных. Проверьте, что площадки включены в config.json (\"enabled\": true)")
@@ -742,7 +1033,12 @@ def main():
                   ", ".join(f"{w} ×{n}" for w, n in UNKNOWN_KO.most_common(15)))
         if not DEMO:
             top = sorted(cands, key=lambda c: -c["score"])[:CFG.get("pool_size", 40)]
-            state["pool"] = {"day": today, "fetched": True, "cars": top}
+            state["pool"] = {"day": today, "fetched": True, "cars": top, "v": POOL_VERSION}
+        if PREFETCH:
+            if not DRY and not DEMO:
+                save_state(state)
+            print(f"Предзагрузка: подготовлено {len(cands)} машин, публикация в ближайшее окно")
+            return
 
     already = Counter() if DEMO else Counter(state["sent_src"].get(today, {}))
     picked = select(cands, quota, CFG["per_source_max"], already)
@@ -751,8 +1047,11 @@ def main():
     sent = []
     for c in picked:
         if DRY:
-            print(f"— [{c['src']}] {c['title']} · ${fmt(c['price'])} · {c['year']} · {c.get('engine') or '—'} · "
-                  f"рынок: {c.get('market')} · выгода: {c['disc']}% · фото: {len(c.get('photos', []))}")
+            src_p = f"{fmt(c['price_src'])} {c.get('currency_src')}" if c.get("price_src") else "—"
+            print(f"— [{c['src']} {country_of(c) or '??'}] {c['title']} · {c['year']} · площадка: {src_p}"
+                  + (f" (курс {c['rate']:g})" if c.get("rate") else "")
+                  + f" · в $: {c.get('price_usd')} · под ключ: {c['price']} · рынок: {c.get('market')} · выгода: {c['disc']}%"
+                  + f" · фото: {len(c.get('photos', []))}")
         elif send(c):
             sent.append(c)
             time.sleep(5)

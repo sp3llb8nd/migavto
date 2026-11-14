@@ -13,6 +13,7 @@
   "slot_tolerance_min": 45,
   "order_link": "@migavtologistic_bot",
   "notes_header": "По предварительной информации:",
+  "flag_count": 10,
   "template": [
     "<b>{header}</b>",
     "{flags}",
@@ -20,9 +21,8 @@
     "<b><i><u>{title}</u></i></b>",
     "",
     "Год: {year}",
-    "Цена: {price_turnkey}$",
-    "под ключ до Минска",
-    "Пробег: {mileage} км",
+    "{price_block}",
+    "Пробег: {mileage}",
     "Двигатель: {engine}",
     "КПП: {transmission}",
     "Привод: {drive}",
@@ -30,11 +30,40 @@
     "",
     "{notes_block}",
     "",
-    "{market_line}",
+    "{market_block}",
     "",
-    "{note}",
-    "Для заказа и полной информации по авто пишите 👇: {order_link}"
+    "Для заказа и полной информации 👇",
+    "{order_link}"
   ],
+  "countries": {
+    "KR": {
+      "header": "Авто из Кореи",
+      "flag": "🇰🇷"
+    },
+    "US": {
+      "header": "Авто из США",
+      "flag": "🇺🇸"
+    },
+    "KG": {
+      "header": "Авто из Кыргызстана",
+      "flag": "🇰🇬"
+    }
+  },
+  "unknown_country": {
+    "header": "Авто под заказ",
+    "flag": ""
+  },
+  "krw_rates": {
+    "sheet_id": "1WzT2FgP11mJchnO91-C5y_yopiACVbwYIuz17ceDFus",
+    "gid": "0",
+    "working_label": "Рабочий курс",
+    "real_label": "Реальный курс",
+    "price_label": "Цена автомобиля",
+    "client_label": "Цена для клиента",
+    "min": 500,
+    "max": 3000,
+    "max_cache_days": 3
+  },
   "filters": {
     "year_min": 2018,
     "price_usd_max": 60000,
@@ -476,20 +505,26 @@
   "sources": [
     {
       "name": "Encar",
-      "enabled": false,
-      "type": "apify",
+      "enabled": true,
+      "type": "apify_list",
       "actor": "bovi~encar-scraper",
-      "header": "Авто из Кореи",
-      "flag": "🇰🇷",
-      "note": "🇰🇷 Авто из Южной Кореи",
+      "entries_file": "MIGAVTO_Encar_227_search_params.txt",
+      "entries_format": "encar_params",
+      "enabled_brands": [
+        "Hyundai",
+        "Kia"
+      ],
+      "group_years": true,
+      "runs_per_day": 3,
+      "time_budget_sec": 1500,
       "input": {
-        "carType": "all",
-        "manufacturer": "현대",
-        "model": "팰리세이드",
-        "yearFrom": 2018,
-        "mileageMax": 150000,
+        "carType": "{carType}",
+        "manufacturer": "{manufacturer}",
+        "model": "{model}",
+        "yearFrom": "{yearFrom}",
+        "yearTo": "{yearTo}",
         "sortBy": "ModifiedDate",
-        "maxResults": 10,
+        "maxResults": 6,
         "proxyConfiguration": {
           "useApifyProxy": true,
           "apifyProxyGroups": [
@@ -497,8 +532,23 @@
           ]
         }
       },
+      "names": {
+        "Hyundai": "현대",
+        "Kia": "기아",
+        "Palisade": "팰리세이드",
+        "Tucson": "투싼",
+        "Santa Fe": "싼타페",
+        "Sonata": "쏘나타",
+        "Kona": "코나",
+        "Sportage": "스포티지",
+        "Sorento": "쏘렌토",
+        "K5": "K5",
+        "Rio": "프라이드",
+        "Seltos": "셀토스",
+        "Carnival": "카니발"
+      },
       "items_path": "",
-      "price_mult": 0.00074,
+      "price_mult": 1,
       "photo_seq": true,
       "turnkey": {
         "mult": 1.0,
@@ -521,69 +571,10 @@
         "url": "url",
         "photos": "imageUrl",
         "photo_count": "photoCount",
-        "engine_cc": "badge",
-        "fuel": "fuelType",
-        "engine": "",
-        "transmission": "",
-        "drive": "",
-        "color": "",
-        "notes": [
-          {
-            "icon": "✅",
-            "text": "Есть диагностика Encar",
-            "path": "hasInspection"
-          }
-        ]
-      }
-    },
-    {
-      "name": "Encar",
-      "enabled": false,
-      "type": "apify",
-      "actor": "bovi~encar-scraper",
-      "header": "Авто из Кореи",
-      "flag": "🇰🇷",
-      "note": "🇰🇷 Авто из Южной Кореи",
-      "input": {
-        "carType": "all",
-        "manufacturer": "현대",
-        "model": "싼타페",
-        "yearFrom": 2018,
-        "mileageMax": 150000,
-        "sortBy": "ModifiedDate",
-        "maxResults": 10,
-        "proxyConfiguration": {
-          "useApifyProxy": true,
-          "apifyProxyGroups": [
-            "RESIDENTIAL"
-          ]
-        }
-      },
-      "items_path": "",
-      "price_mult": 0.00074,
-      "photo_seq": true,
-      "turnkey": {
-        "mult": 1.0,
-        "add_usd": 5000,
-        "customs": true
-      },
-      "fields": {
-        "id": "carId",
-        "title": [
-          "manufacturer",
-          "model",
+        "engine_cc": [
           "badge",
           "badgeDetail"
         ],
-        "make": "manufacturer",
-        "model": "model",
-        "price": "priceKrw",
-        "year": "yearMonth",
-        "km": "mileageKm",
-        "url": "url",
-        "photos": "imageUrl",
-        "photo_count": "photoCount",
-        "engine_cc": "badge",
         "fuel": "fuelType",
         "engine": "",
         "transmission": "",
@@ -592,30 +583,46 @@
         "notes": [
           {
             "icon": "✅",
-            "text": "Есть диагностика Encar",
+            "text": "Есть диагностика авто",
             "path": "hasInspection"
           }
-        ]
-      }
+        ],
+        "price_alt": "priceManwon",
+        "price_alt_mult": 10000
+      },
+      "country": "KR",
+      "price_currency": "KRW",
+      "min_price": 1000000,
+      "invalid_prices": [
+        99990000
+      ],
+      "price_mode": "turnkey",
+      "show_source_price": false,
+      "source_price_label": "Цена в Корее:",
+      "source_currency_sign": "₩"
     },
     {
       "name": "Copart",
-      "enabled": false,
-      "type": "apify",
+      "enabled": true,
+      "type": "apify_list",
       "actor": "ahmed_jasarevic~copart-scraper",
-      "header": "Авто из США",
-      "flag": "🇺🇸",
-      "note": "🇺🇸 Авто из США (аукцион)",
+      "entries_file": "copart.txt",
+      "entries_format": "links",
+      "runs_per_day": 4,
+      "time_budget_sec": 1500,
       "input": {
         "startUrls": [
           {
-            "url": "https://www.copart.com/lotSearchResults/?free=true&query=toyota+camry"
+            "url": "{url}"
           }
         ],
-        "maxItems": 10,
+        "maxItems": 20,
         "maxRequestRetries": 5,
         "proxyConfiguration": {
-          "useApifyProxy": true
+          "useApifyProxy": true,
+          "apifyProxyGroups": [
+            "RESIDENTIAL"
+          ]
         }
       },
       "items_path": "",
@@ -656,7 +663,13 @@
             "path": "primaryDamage"
           }
         ]
-      }
+      },
+      "country": "US",
+      "price_currency": "USD",
+      "price_mode": "auction",
+      "price_label": "Цена на аукционе:",
+      "price_note": "текущая ставка",
+      "market_line": false
     },
     {
       "name": "mashina.kg",
@@ -674,14 +687,64 @@
       "exclude_cities": [
         "kitay"
       ],
-      "header": "Авто из Кыргызстана",
-      "flag": "🇰🇬",
-      "note": "🇰🇬 Авто из Кыргызстана",
       "turnkey": {
         "mult": 1.0,
         "add_usd": 2600,
         "customs": false
-      }
+      },
+      "country": "KG",
+      "price_mode": "turnkey"
     }
-  ]
+  ],
+  "value_map": {
+    "GAS": "бензин",
+    "GASOLINE": "бензин",
+    "DIESEL": "дизель",
+    "HYBRID ENGINE": "гибрид",
+    "HYBRID": "гибрид",
+    "ELECTRIC": "электро",
+    "FLEXIBLE FUEL": "бензин/этанол",
+    "AUTOMATIC": "автомат",
+    "MANUAL": "механика",
+    "FRONT-WHEEL DRIVE": "передний",
+    "REAR-WHEEL DRIVE": "задний",
+    "ALL WHEEL DRIVE": "полный",
+    "4X4 W/FRONT WHL DRV": "полный",
+    "4X4 W/REAR WHEEL DRV": "полный",
+    "BLACK": "чёрный",
+    "WHITE": "белый",
+    "SILVER": "серебристый",
+    "GRAY": "серый",
+    "GREY": "серый",
+    "BLUE": "синий",
+    "RED": "красный",
+    "GREEN": "зелёный",
+    "BROWN": "коричневый",
+    "BEIGE": "бежевый",
+    "GOLD": "золотистый",
+    "ORANGE": "оранжевый",
+    "YELLOW": "жёлтый",
+    "PURPLE": "фиолетовый",
+    "MAROON": "бордовый",
+    "CHARCOAL": "тёмно-серый",
+    "FRONT END": "передняя часть",
+    "REAR END": "задняя часть",
+    "SIDE": "бок",
+    "MINOR DENT/SCRATCHES": "мелкие вмятины и царапины",
+    "ALL OVER": "по всему кузову",
+    "HAIL": "град",
+    "WATER/FLOOD": "вода/затопление",
+    "MECHANICAL": "механические повреждения",
+    "NORMAL WEAR": "обычный износ",
+    "UNDERCARRIAGE": "днище",
+    "ROLLOVER": "опрокидывание",
+    "VANDALISM": "вандализм",
+    "BURN": "пожар",
+    "BURN - ENGINE": "пожар (двигатель)",
+    "BURN - INTERIOR": "пожар (салон)",
+    "TOP/ROOF": "крыша",
+    "STRIPPED": "разукомплектован",
+    "BIOHAZARD/CHEMICAL": "биологическое/химическое загрязнение",
+    "UNKNOWN": "не указано"
+  }
 }
