@@ -733,6 +733,10 @@ def read_entries(src):
                 keys = sorted(k for k in g["keys"] if y0 <= int(k.rpartition("|")[2]) <= y1)
                 entries.append({"label": f"{mb} {mm} {y0}" + (f"–{y1}" if y1 != y0 else ""), "brand": g["brand"], "keys": keys,
                                 "subs": {"manufacturer": mb, "model": mm, "yearFrom": y0, "yearTo": y1, "carType": g["ctype"]}})
+    ymin = (CFG.get("filters") or {}).get("year_min") or CFG.get("year_min")
+    if ymin:  # запросы только по годам ниже минимального — пустая трата Apify: все машины всё равно отсеются
+        entries = [e for e in entries if not e["keys"] or any(int(k.rpartition("|")[2]) >= ymin for k in e["keys"]
+                                                              if k.rpartition("|")[2].isdigit())]
     ob = {b.lower() for b in src.get("enabled_brands", [])}
     entries = [e for e in entries if not ob or e["brand"].lower() in ob or "url" in e["subs"]]
     if src.get("links_file") and src.get("entries_format") != "links" and os.path.exists(src["links_file"]):
