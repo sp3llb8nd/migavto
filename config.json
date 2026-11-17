@@ -19,11 +19,9 @@
     "",
     "{costs_block}",
     "",
-    "{notes_block}",
     "",
     "{market_block}",
     "",
-    "{source_line}",
     "Для заказа и полной информации 👇",
     "{order_link}"
   ],
@@ -613,7 +611,7 @@
         "fetch_every_hours": 24
       },
       "source_label": "Encar",
-      "show_source": true,
+      "show_source": false,
       "run_timeout_sec": 600
     },
     {
@@ -694,7 +692,7 @@
         "fetch_every_hours": 24
       },
       "source_label": "аукцион Copart",
-      "show_source": true,
+      "show_source": false,
       "run_timeout_sec": 600,
       "price_label_alt": "Купить сейчас:",
       "price_note_alt": "цена выкупа без торгов",
@@ -768,7 +766,7 @@
         "fetch_every_hours": 6
       },
       "source_label": "mashina.kg",
-      "show_source": true
+      "show_source": false
     }
   ],
   "value_map": {
@@ -1103,5 +1101,6 @@
       null,
       2261
     ]
-  ]
+  ],
+  "price_icon": ""
 }

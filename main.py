@@ -887,6 +887,8 @@ def mashina_car(it, src, keys):
     vol = (A.get("engine_volume") or {}).get("value_number")  # у гибридов бывает ёмкость батареи в кВт·ч: отсекаем
     cc = round(vol * 1000) if isinstance(vol, (int, float)) and 0.6 <= vol <= 8.5 else None
     km = (A.get("mileage") or {}).get("value_number")
+    if isinstance(km, (int, float)) and 0 < km < 1000 and year and date.today().year - year >= 2:
+        km *= 1000  # продавцы часто пишут пробег в тысячах («108» = 108 000 км); у машины старше года 108 км не бывает
     steer = (A.get("steering_wheel") or {}).get("value_text") or ""
     notes = [f"🚘 Руль: {steer.lower()}"] if steer and steer.lower() != "слева" else []
     photos = [im.get("big") or im.get("medium") for im in it.get("images") or []]
@@ -1098,10 +1100,10 @@ def render(c):
         if not price_ok(c):
             return None
         alt = c.get("price_kind") == "alt"
-        price_lines = [f"{s.get('price_label_alt' if alt else 'price_label', 'Цена на аукционе:')} ❤️ {money(c['price_usd'])}",
+        price_lines = [f"{s.get('price_label_alt' if alt else 'price_label', 'Цена на аукционе:')} {CFG.get('price_icon', '')}{money(c['price_usd'])}",
                        s.get("price_note_alt" if alt else "price_note", "")]
     else:
-        price_lines = [f"{s.get('price_label', 'Цена:')} ❤️ {money(c['price'])}", s.get("price_note", "под ключ до Минска")]
+        price_lines = [f"{s.get('price_label', 'Цена:')} {CFG.get('price_icon', '')}{money(c['price'])}", s.get("price_note", "под ключ до Минска")]
     if s.get("show_source_price") and c.get("currency_src") not in (None, "USD") and c.get("price_src"):
         price_lines.append(f"{s.get('source_price_label', 'Цена на площадке:')} {money(c['price_src'], s.get('source_currency_sign', c['currency_src']))}")
     costs = []
@@ -1509,6 +1511,19 @@ def plan(state, now, rnd=random):
         log("SCHEDULER", f"Запланировано на {t:%H:%M}: [{tag(pick_rec['src'])}] {pick_rec.get('title')}")
 
 
+def replan_future(state, now):
+    """После сбора: посты, назначенные позже чем через 20 минут, возвращаются в очередь и планируются заново,
+    чтобы площадки чередовались, а не шли подряд из той, что была собрана первой."""
+    n = 0
+    for r in state["items"].values():
+        t = parse_dt(r.get("scheduled_at"), now.tzinfo) if r.get("status") == "scheduled" else None
+        if t and t > now + timedelta(minutes=20):
+            r.update(status="queued", scheduled_at=None)
+            n += 1
+    if n:
+        log("SCHEDULER", f"Расписание пересобрано с учётом новых объявлений ({n} постов)")
+
+
 def keep_spacing(state, now, rnd=random):
     """После публикации следующая не раньше чем через минимальный интервал."""
     tzi, mn = now.tzinfo, SCHED.get("min_interval_min", 20)
@@ -1736,6 +1751,8 @@ def run_mode(mode):
                 + ", ".join(f"{w} ×{n}" for w, n in UNKNOWN_KO.most_common(15)))
     expire(state, now)
     reflow(state, now)
+    if mode in ("fetch", "fetch-all"):
+        replan_future(state, now)
     plan(state, now)
     if mode == "dry":
         log("SCHEDULER", "Режим проверки: ничего не сохранено и не отправлено")
