@@ -1,0 +1,188 @@
+MIGAVTO — полный список Encar / Apify (227 комбинаций)
+
+Важно: - Это список параметров для Actor bovi/encar-scraper, а не
+выдуманные URL Encar. - Прямая ссылка на результаты Encar требует URL,
+скопированный из интерфейса Encar после выбора фильтров; формат
+состояния поиска находится в hash-фрагменте SPA. - В документации Actor
+подтверждены carType, manufacturer, model, yearFrom, yearTo, sortBy,
+maxResults. - Для точного года yearFrom = yearTo. - Не передавать
+priceFrom, priceTo, mileageMax и fuelType. - manufacturer/model —
+значения, которые Actor должен сопоставить с каталогом Encar; поколения
+проверять отдельно.
+
+Каталог Encar: https://www.encar.com/ Actor:
+https://apify.com/bovi/encar-scraper/input Actor sortBy: ModifiedDate
+(сортировка по дате изменения/обновления).
+
+Формат каждой записи: brand | model | yearFrom | yearTo | carType |
+sortBy
+
+Hyundai | Palisade | 2022 | 2022 | all | ModifiedDate Hyundai | Palisade
+| 2021 | 2021 | all | ModifiedDate Hyundai | Tucson | 2023 | 2023 | all
+| ModifiedDate Hyundai | Tucson | 2022 | 2022 | all | ModifiedDate
+Hyundai | Tucson | 2021 | 2021 | all | ModifiedDate Hyundai | Santa Fe |
+2022 | 2022 | all | ModifiedDate Hyundai | Santa Fe | 2021 | 2021 | all
+| ModifiedDate Hyundai | Sonata | 2022 | 2022 | all | ModifiedDate
+Hyundai | Sonata | 2021 | 2021 | all | ModifiedDate Hyundai | Kona |
+2022 | 2022 | all | ModifiedDate Kia | Sportage | 2023 | 2023 | all |
+ModifiedDate Kia | Sportage | 2022 | 2022 | all | ModifiedDate Kia |
+Sportage | 2021 | 2021 | all | ModifiedDate Kia | Sorento | 2022 | 2022
+| all | ModifiedDate Kia | Sorento | 2021 | 2021 | all | ModifiedDate
+Kia | K5 | 2022 | 2022 | all | ModifiedDate Kia | K5 | 2021 | 2021 | all
+| ModifiedDate Kia | Rio | 2021 | 2021 | all | ModifiedDate Kia | Seltos
+| 2022 | 2022 | all | ModifiedDate Kia | Carnival | 2022 | 2022 | all |
+ModifiedDate Volkswagen | Passat | 2022 | 2022 | all | ModifiedDate
+Volkswagen | Passat | 2021 | 2021 | all | ModifiedDate Volkswagen |
+Passat | 2020 | 2020 | all | ModifiedDate Volkswagen | Tiguan | 2022 |
+2022 | all | ModifiedDate Volkswagen | Tiguan | 2021 | 2021 | all |
+ModifiedDate Volkswagen | Tiguan | 2020 | 2020 | all | ModifiedDate
+Volkswagen | Golf | 2021 | 2021 | all | ModifiedDate Volkswagen | Golf |
+2020 | 2020 | all | ModifiedDate Volkswagen | Jetta | 2022 | 2022 | all
+| ModifiedDate Volkswagen | Jetta | 2021 | 2021 | all | ModifiedDate
+Skoda | Octavia | 2022 | 2022 | all | ModifiedDate Skoda | Octavia |
+2021 | 2021 | all | ModifiedDate Skoda | Octavia | 2020 | 2020 | all |
+ModifiedDate Skoda | Superb | 2021 | 2021 | all | ModifiedDate Skoda |
+Superb | 2020 | 2020 | all | ModifiedDate Skoda | Kodiaq | 2022 | 2022 |
+all | ModifiedDate Skoda | Kodiaq | 2021 | 2021 | all | ModifiedDate
+Toyota | Camry | 2022 | 2022 | all | ModifiedDate Toyota | Camry | 2021
+| 2021 | all | ModifiedDate Toyota | Camry | 2020 | 2020 | all |
+ModifiedDate Toyota | RAV4 | 2022 | 2022 | all | ModifiedDate Toyota |
+RAV4 | 2021 | 2021 | all | ModifiedDate Toyota | RAV4 | 2020 | 2020 |
+all | ModifiedDate Toyota | Corolla | 2022 | 2022 | all | ModifiedDate
+Toyota | Corolla | 2021 | 2021 | all | ModifiedDate Toyota | Highlander
+| 2021 | 2021 | all | ModifiedDate BMW | X5 | 2022 | 2022 | all |
+ModifiedDate BMW | X5 | 2021 | 2021 | all | ModifiedDate BMW | X5 | 2020
+| 2020 | all | ModifiedDate BMW | X3 | 2022 | 2022 | all | ModifiedDate
+BMW | X3 | 2021 | 2021 | all | ModifiedDate BMW | 5 Series | 2021 | 2021
+| all | ModifiedDate BMW | 5 Series | 2020 | 2020 | all | ModifiedDate
+BMW | 3 Series | 2022 | 2022 | all | ModifiedDate BMW | 3 Series | 2021
+| 2021 | all | ModifiedDate Mercedes-Benz | GLE | 2021 | 2021 | all |
+ModifiedDate Mercedes-Benz | GLC | 2021 | 2021 | all | ModifiedDate
+Mercedes-Benz | E-Class | 2021 | 2021 | all | ModifiedDate Mercedes-Benz
+| C-Class | 2021 | 2021 | all | ModifiedDate Audi | A6 | 2022 | 2022 |
+all | ModifiedDate Audi | A6 | 2021 | 2021 | all | ModifiedDate Audi |
+Q5 | 2022 | 2022 | all | ModifiedDate Audi | Q5 | 2021 | 2021 | all |
+ModifiedDate Audi | Q7 | 2022 | 2022 | all | ModifiedDate Audi | A4 |
+2021 | 2021 | all | ModifiedDate Renault | Duster | 2022 | 2022 | all |
+ModifiedDate Renault | Duster | 2021 | 2021 | all | ModifiedDate Renault
+| Megane | 2021 | 2021 | all | ModifiedDate Renault | Megane | 2020 |
+2020 | all | ModifiedDate Renault | Logan | 2020 | 2020 | all |
+ModifiedDate Nissan | Qashqai | 2022 | 2022 | all | ModifiedDate Nissan
+| Qashqai | 2021 | 2021 | all | ModifiedDate Nissan | X-Trail | 2021 |
+2021 | all | ModifiedDate Nissan | Rogue | 2021 | 2021 | all |
+ModifiedDate Nissan | Leaf | 2021 | 2021 | all | ModifiedDate Ford |
+Kuga | 2021 | 2021 | all | ModifiedDate Ford | Focus | 2021 | 2021 | all
+| ModifiedDate Ford | Focus | 2020 | 2020 | all | ModifiedDate Ford |
+Escape | 2021 | 2021 | all | ModifiedDate Mazda | CX-5 | 2022 | 2022 |
+all | ModifiedDate Mazda | CX-5 | 2021 | 2021 | all | ModifiedDate Mazda
+| 6 | 2021 | 2021 | all | ModifiedDate Volvo | XC60 | 2021 | 2021 | all
+| ModifiedDate Volvo | XC90 | 2021 | 2021 | all | ModifiedDate Lexus |
+RX | 2021 | 2021 | all | ModifiedDate Lexus | NX | 2021 | 2021 | all |
+ModifiedDate Geely | Monjaro | 2023 | 2023 | all | ModifiedDate Geely |
+Atlas Pro | 2022 | 2022 | all | ModifiedDate Geely | Coolray | 2023 |
+2023 | all | ModifiedDate Geely | Coolray | 2022 | 2022 | all |
+ModifiedDate Geely | Tugella | 2022 | 2022 | all | ModifiedDate Belgee |
+X50 | 2024 | 2024 | all | ModifiedDate Belgee | X70 | 2024 | 2024 | all
+| ModifiedDate BYD | Song Plus | 2023 | 2023 | all | ModifiedDate BYD |
+Yuan Plus | 2023 | 2023 | all | ModifiedDate BYD | Han | 2023 | 2023 |
+all | ModifiedDate Tesla | Model 3 | 2022 | 2022 | all | ModifiedDate
+Tesla | Model Y | 2022 | 2022 | all | ModifiedDate BMW | 5 Series G30 |
+2017 | 2017 | all | ModifiedDate BMW | 5 Series G30 | 2018 | 2018 | all
+| ModifiedDate BMW | 5 Series G30 | 2019 | 2019 | all | ModifiedDate BMW
+| 5 Series G30 | 2020 | 2020 | all | ModifiedDate BMW | 5 Series G30 |
+2021 | 2021 | all | ModifiedDate BMW | 5 Series G30 | 2022 | 2022 | all
+| ModifiedDate BMW | 3 Series G20 | 2019 | 2019 | all | ModifiedDate BMW
+| 3 Series G20 | 2020 | 2020 | all | ModifiedDate BMW | 3 Series G20 |
+2021 | 2021 | all | ModifiedDate BMW | 3 Series G20 | 2022 | 2022 | all
+| ModifiedDate BMW | 3 Series G20 | 2023 | 2023 | all | ModifiedDate BMW
+| 3 Series F30 | 2015 | 2015 | all | ModifiedDate BMW | 3 Series F30 |
+2016 | 2016 | all | ModifiedDate BMW | 3 Series F30 | 2017 | 2017 | all
+| ModifiedDate BMW | 3 Series F30 | 2018 | 2018 | all | ModifiedDate BMW
+| 3 Series F30 | 2019 | 2019 | all | ModifiedDate BMW | X5 F15 | 2015 |
+2015 | all | ModifiedDate BMW | X5 F15 | 2016 | 2016 | all |
+ModifiedDate BMW | X5 F15 | 2017 | 2017 | all | ModifiedDate BMW | X5
+F15 | 2018 | 2018 | all | ModifiedDate Audi | A6 C7 | 2015 | 2015 | all
+| ModifiedDate Audi | A6 C7 | 2016 | 2016 | all | ModifiedDate Audi | A6
+C7 | 2017 | 2017 | all | ModifiedDate Audi | A6 C7 | 2018 | 2018 | all |
+ModifiedDate Audi | A6 C8 | 2019 | 2019 | all | ModifiedDate Audi | A6
+C8 | 2020 | 2020 | all | ModifiedDate Audi | A6 C8 | 2021 | 2021 | all |
+ModifiedDate Audi | A6 C8 | 2022 | 2022 | all | ModifiedDate Audi | A6
+C8 | 2023 | 2023 | all | ModifiedDate Audi | A6 C8 | 2024 | 2024 | all |
+ModifiedDate Audi | A6 C8 | 2025 | 2025 | all | ModifiedDate Audi | A4 |
+2018 | 2018 | all | ModifiedDate Audi | A4 | 2019 | 2019 | all |
+ModifiedDate Audi | A4 | 2020 | 2020 | all | ModifiedDate Audi | A4 |
+2022 | 2022 | all | ModifiedDate Audi | A4 | 2023 | 2023 | all |
+ModifiedDate Audi | A4 | 2024 | 2024 | all | ModifiedDate Audi | Q5 |
+2018 | 2018 | all | ModifiedDate Audi | Q5 | 2019 | 2019 | all |
+ModifiedDate Audi | Q5 | 2020 | 2020 | all | ModifiedDate Audi | Q5 |
+2023 | 2023 | all | ModifiedDate Audi | Q5 | 2024 | 2024 | all |
+ModifiedDate Audi | Q5 | 2025 | 2025 | all | ModifiedDate Audi | Q6
+e-tron | 2024 | 2024 | all | ModifiedDate Audi | Q6 e-tron | 2025 | 2025
+| all | ModifiedDate Audi | Q6 e-tron | 2026 | 2026 | all | ModifiedDate
+Audi | Q8 | 2019 | 2019 | all | ModifiedDate Audi | Q8 | 2020 | 2020 |
+all | ModifiedDate Audi | Q8 | 2021 | 2021 | all | ModifiedDate Audi |
+Q8 | 2022 | 2022 | all | ModifiedDate Audi | Q8 | 2023 | 2023 | all |
+ModifiedDate Audi | Q8 | 2024 | 2024 | all | ModifiedDate Audi | Q8 |
+2025 | 2025 | all | ModifiedDate Kia | K5 | 2020 | 2020 | all |
+ModifiedDate Kia | K5 | 2023 | 2023 | all | ModifiedDate Kia | K5 | 2024
+| 2024 | all | ModifiedDate Kia | K5 | 2025 | 2025 | all | ModifiedDate
+Kia | K5 | 2026 | 2026 | all | ModifiedDate Kia | Carnival | 2018 | 2018
+| all | ModifiedDate Kia | Carnival | 2019 | 2019 | all | ModifiedDate
+Kia | Carnival | 2020 | 2020 | all | ModifiedDate Kia | Carnival | 2021
+| 2021 | all | ModifiedDate Kia | Carnival | 2023 | 2023 | all |
+ModifiedDate Kia | Carnival | 2024 | 2024 | all | ModifiedDate Kia |
+Carnival | 2025 | 2025 | all | ModifiedDate Kia | Sorento | 2018 | 2018
+| all | ModifiedDate Kia | Sorento | 2019 | 2019 | all | ModifiedDate
+Kia | Sorento | 2020 | 2020 | all | ModifiedDate Kia | Sorento | 2023 |
+2023 | all | ModifiedDate Kia | Sorento | 2024 | 2024 | all |
+ModifiedDate Kia | Sorento | 2025 | 2025 | all | ModifiedDate Hyundai |
+Santa Fe | 2018 | 2018 | all | ModifiedDate Hyundai | Santa Fe | 2019 |
+2019 | all | ModifiedDate Hyundai | Santa Fe | 2020 | 2020 | all |
+ModifiedDate Hyundai | Santa Fe | 2023 | 2023 | all | ModifiedDate
+Hyundai | Santa Fe | 2024 | 2024 | all | ModifiedDate Hyundai | Santa Fe
+| 2025 | 2025 | all | ModifiedDate Hyundai | Santa Fe | 2026 | 2026 |
+all | ModifiedDate Hyundai | Palisade | 2018 | 2018 | all | ModifiedDate
+Hyundai | Palisade | 2019 | 2019 | all | ModifiedDate Hyundai | Palisade
+| 2020 | 2020 | all | ModifiedDate Hyundai | Palisade | 2023 | 2023 |
+all | ModifiedDate Hyundai | Palisade | 2024 | 2024 | all | ModifiedDate
+Hyundai | Palisade | 2025 | 2025 | all | ModifiedDate Ford | Mustang |
+2015 | 2015 | all | ModifiedDate Ford | Mustang | 2016 | 2016 | all |
+ModifiedDate Ford | Mustang | 2017 | 2017 | all | ModifiedDate Ford |
+Mustang | 2018 | 2018 | all | ModifiedDate Ford | Mustang | 2019 | 2019
+| all | ModifiedDate Ford | Mustang | 2020 | 2020 | all | ModifiedDate
+Ford | Mustang | 2021 | 2021 | all | ModifiedDate Ford | Mustang | 2022
+| 2022 | all | ModifiedDate Ford | Mustang | 2023 | 2023 | all |
+ModifiedDate Ford | Mustang | 2024 | 2024 | all | ModifiedDate Ford |
+Mustang | 2025 | 2025 | all | ModifiedDate Ford | Mustang | 2026 | 2026
+| all | ModifiedDate Dodge | Challenger | 2015 | 2015 | all |
+ModifiedDate Dodge | Challenger | 2016 | 2016 | all | ModifiedDate Dodge
+| Challenger | 2017 | 2017 | all | ModifiedDate Dodge | Challenger |
+2018 | 2018 | all | ModifiedDate Dodge | Challenger | 2019 | 2019 | all
+| ModifiedDate Dodge | Challenger | 2020 | 2020 | all | ModifiedDate
+Dodge | Challenger | 2021 | 2021 | all | ModifiedDate Dodge | Challenger
+| 2022 | 2022 | all | ModifiedDate Dodge | Challenger | 2023 | 2023 |
+all | ModifiedDate Toyota | Land Cruiser 200 | 2015 | 2015 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2016 | 2016 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2017 | 2017 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2018 | 2018 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2019 | 2019 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2020 | 2020 | all |
+ModifiedDate Toyota | Land Cruiser 200 | 2021 | 2021 | all |
+ModifiedDate Toyota | Land Cruiser 300 | 2022 | 2022 | all |
+ModifiedDate Toyota | Land Cruiser 300 | 2023 | 2023 | all |
+ModifiedDate Toyota | Land Cruiser 300 | 2024 | 2024 | all |
+ModifiedDate Toyota | Land Cruiser 300 | 2025 | 2025 | all |
+ModifiedDate Toyota | Land Cruiser 300 | 2026 | 2026 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2015 | 2015 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2016 | 2016 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2017 | 2017 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2018 | 2018 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2019 | 2019 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2020 | 2020 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2021 | 2021 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2022 | 2022 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2023 | 2023 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2024 | 2024 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2025 | 2025 | all |
+ModifiedDate Toyota | Land Cruiser Prado | 2026 | 2026 | all |
+ModifiedDate

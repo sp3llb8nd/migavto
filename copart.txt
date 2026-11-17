@@ -1,0 +1,30 @@
+toyota camry|2020 — https://www.copart.com/vehicle-search-year/toyota/camry/2020?modelDisplayStr=CAMRY
+toyota camry|2021 — https://www.copart.com/vehicle-search-year/toyota/camry/2021?modelDisplayStr=CAMRY
+toyota camry|2022 — https://www.copart.com/vehicle-search-year/toyota/camry/2022?modelDisplayStr=CAMRY
+
+toyota rav4|2020 — https://www.copart.com/vehicle-search-year/toyota/rav4/2020?modelDisplayStr=RAV4
+toyota rav4|2021 — https://www.copart.com/vehicle-search-year/toyota/rav4/2021?modelDisplayStr=RAV4
+toyota rav4|2022 — https://www.copart.com/vehicle-search-year/toyota/rav4/2022?modelDisplayStr=RAV4
+
+ford mustang|2015 — https://www.copart.com/vehicle-search-year/ford/mustang/2015?modelDisplayStr=MUSTANG
+ford mustang|2016 — https://www.copart.com/vehicle-search-year/ford/mustang/2016?modelDisplayStr=MUSTANG
+ford mustang|2017 — https://www.copart.com/vehicle-search-year/ford/mustang/2017?modelDisplayStr=MUSTANG
+ford mustang|2018 — https://www.copart.com/vehicle-search-year/ford/mustang/2018?modelDisplayStr=MUSTANG
+ford mustang|2019 — https://www.copart.com/vehicle-search-year/ford/mustang/2019?modelDisplayStr=MUSTANG
+ford mustang|2020 — https://www.copart.com/vehicle-search-year/ford/mustang/2020?modelDisplayStr=MUSTANG
+ford mustang|2021 — https://www.copart.com/vehicle-search-year/ford/mustang/2021?modelDisplayStr=MUSTANG
+ford mustang|2022 — https://www.copart.com/vehicle-search-year/ford/mustang/2022?modelDisplayStr=MUSTANG
+ford mustang|2023 — https://www.copart.com/vehicle-search-year/ford/mustang/2023?modelDisplayStr=MUSTANG
+ford mustang|2024 — https://www.copart.com/vehicle-search-year/ford/mustang/2024?modelDisplayStr=MUSTANG
+ford mustang|2025 — https://www.copart.com/vehicle-search-year/ford/mustang/2025?modelDisplayStr=MUSTANG
+ford mustang|2026 — https://www.copart.com/vehicle-search-year/ford/mustang/2026?modelDisplayStr=MUSTANG
+
+dodge challenger|2015 — https://www.copart.com/vehicle-search-year/dodge/challenger/2015?modelDisplayStr=CHALLENGER
+dodge challenger|2016 — https://www.copart.com/vehicle-search-year/dodge/challenger/2016?modelDisplayStr=CHALLENGER
+dodge challenger|2017 — https://www.copart.com/vehicle-search-year/dodge/challenger/2017?modelDisplayStr=CHALLENGER
+dodge challenger|2018 — https://www.copart.com/vehicle-search-year/dodge/challenger/2018?modelDisplayStr=CHALLENGER
+dodge challenger|2019 — https://www.copart.com/vehicle-search-year/dodge/challenger/2019?modelDisplayStr=CHALLENGER
+dodge challenger|2020 — https://www.copart.com/vehicle-search-year/dodge/challenger/2020?modelDisplayStr=CHALLENGER
+dodge challenger|2021 — https://www.copart.com/vehicle-search-year/dodge/challenger/2021?modelDisplayStr=CHALLENGER
+dodge challenger|2022 — https://www.copart.com/vehicle-search-year/dodge/challenger/2022?modelDisplayStr=CHALLENGER
+dodge challenger|2023 — https://www.copart.com/vehicle-search-year/dodge/challenger/2023?modelDisplayStr=CHALLENGER
