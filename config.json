@@ -693,7 +693,13 @@
       "price_label_alt": "Купить сейчас:",
       "price_note_alt": "цена выкупа без торгов",
       "show_costs": true,
-      "costs_header": "Расходы до Минска (оценка):"
+      "costs_header": "Расходы до Минска (оценка):",
+      "rewrite_copart_links": true,
+      "vin_field": [
+        "vin",
+        "VIN",
+        "vinNumber"
+      ]
     },
     {
       "name": "mashina.kg",
@@ -833,5 +839,263 @@
     "retry_base_min": 15,
     "max_retry_after_wait_sec": 60,
     "skipped_keep_days": 3
-  }
+  },
+  "engine_defaults_note": "Типовой объём двигателя (см³), если площадка не дала объём: [«марка модель», «diesel»/«petrol»/null, см³]. В посте такой объём помечается «≈».",
+  "engine_defaults": [
+    [
+      "land cruiser prado",
+      "diesel",
+      2755
+    ],
+    [
+      "land cruiser prado",
+      null,
+      2694
+    ],
+    [
+      "land cruiser",
+      null,
+      3445
+    ],
+    [
+      "audi a4",
+      null,
+      1984
+    ],
+    [
+      "audi a6",
+      null,
+      1984
+    ],
+    [
+      "audi q5",
+      null,
+      1984
+    ],
+    [
+      "audi q7",
+      null,
+      2995
+    ],
+    [
+      "audi q8",
+      null,
+      2995
+    ],
+    [
+      "bmw 3",
+      null,
+      1998
+    ],
+    [
+      "bmw 5",
+      null,
+      1998
+    ],
+    [
+      "bmw x3",
+      null,
+      1998
+    ],
+    [
+      "bmw x5",
+      null,
+      2998
+    ],
+    [
+      "kona",
+      null,
+      1598
+    ],
+    [
+      "palisade",
+      "diesel",
+      2199
+    ],
+    [
+      "palisade",
+      null,
+      3778
+    ],
+    [
+      "santa fe",
+      "diesel",
+      2151
+    ],
+    [
+      "santa fe",
+      null,
+      2497
+    ],
+    [
+      "sonata",
+      null,
+      1999
+    ],
+    [
+      "tucson",
+      "diesel",
+      1995
+    ],
+    [
+      "tucson",
+      null,
+      1598
+    ],
+    [
+      "carnival",
+      "diesel",
+      2151
+    ],
+    [
+      "carnival",
+      null,
+      3470
+    ],
+    [
+      "k5",
+      null,
+      1999
+    ],
+    [
+      "kia rio",
+      null,
+      1368
+    ],
+    [
+      "seltos",
+      null,
+      1591
+    ],
+    [
+      "sorento",
+      "diesel",
+      2151
+    ],
+    [
+      "sorento",
+      null,
+      2497
+    ],
+    [
+      "sportage",
+      "diesel",
+      1995
+    ],
+    [
+      "sportage",
+      null,
+      1598
+    ],
+    [
+      "lexus nx",
+      null,
+      2487
+    ],
+    [
+      "lexus rx",
+      null,
+      2487
+    ],
+    [
+      "c class",
+      null,
+      1991
+    ],
+    [
+      "e class",
+      null,
+      1991
+    ],
+    [
+      "glc",
+      null,
+      1991
+    ],
+    [
+      "gle",
+      "diesel",
+      2925
+    ],
+    [
+      "gle",
+      null,
+      2999
+    ],
+    [
+      "camry",
+      null,
+      2487
+    ],
+    [
+      "corolla",
+      null,
+      1798
+    ],
+    [
+      "highlander",
+      null,
+      2487
+    ],
+    [
+      "rav4",
+      null,
+      2487
+    ],
+    [
+      "golf",
+      "diesel",
+      1968
+    ],
+    [
+      "golf",
+      null,
+      1395
+    ],
+    [
+      "jetta",
+      null,
+      1395
+    ],
+    [
+      "passat",
+      "diesel",
+      1968
+    ],
+    [
+      "passat",
+      null,
+      1984
+    ],
+    [
+      "tiguan",
+      "diesel",
+      1968
+    ],
+    [
+      "tiguan",
+      null,
+      1984
+    ],
+    [
+      "volvo xc60",
+      null,
+      1969
+    ],
+    [
+      "volvo xc90",
+      null,
+      1969
+    ],
+    [
+      "challenger",
+      null,
+      3604
+    ],
+    [
+      "mustang",
+      null,
+      2261
+    ]
+  ]
 }

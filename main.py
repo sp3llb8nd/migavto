@@ -503,8 +503,54 @@ def parse_date(v):
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
 
 
-def engine_text(cc, fuel):
-    return (f"{cc / 1000:.1f} л" + (f", {fuel}" if fuel else "")) if cc else ""
+def engine_text(cc, fuel, est=False):
+    return (("≈" if est else "") + f"{cc / 1000:.1f} л" + (f", {fuel}" if fuel else "")) if cc else ""
+
+
+DIESEL_WORDS = ("дизел", "diesel", "디젤")
+
+
+def default_cc(src, text, fuel):
+    """Типовой объём двигателя модели, если площадка его не дала (Encar в списке объявлений объём не отдаёт).
+    Правила из config.json → engine_defaults: [«марка модель», «diesel»/«petrol»/null, см³]; первое совпадение."""
+    t = " ".join(str(text or "").lower().replace("-", " ").split())
+    diesel = any(w in str(fuel or "").lower() for w in DIESEL_WORDS)
+    for rule in src.get("engine_defaults") or CFG.get("engine_defaults") or []:
+        match, kind, cc = rule
+        if match.lower().replace("-", " ") in t and (kind is None or (kind == "diesel") == diesel):
+            return cc
+    return None
+
+
+def vin_fill(raws, src, t):
+    """Copart: у части лотов поле engine пустое или без объёма. Объём берём по VIN из бесплатной базы NHTSA (США)."""
+    vf = src.get("vin_field")
+    if not vf:
+        return
+    need = {}
+    for r in raws:
+        if isinstance(r, dict) and not engine_cc(pick(r, src["fields"].get("engine_cc"))):
+            vin = str(next((pick(r, k) for k in ([vf] if isinstance(vf, str) else vf) if pick(r, k)), "") or "").strip().upper()
+            if len(vin) == 17 and "*" not in vin:
+                need.setdefault(vin, []).append(r)
+    if not need:
+        return
+    found, vins = 0, list(need)
+    for i in range(0, len(vins), 50):
+        try:
+            resp = requests.post("https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/",
+                                 data={"format": "json", "data": ";".join(vins[i:i + 50])}, timeout=60)
+            rows = resp.json().get("Results") or []
+        except Exception as ex:
+            log(t, f"⚠️ Расшифровка VIN (NHTSA) не удалась: {str(ex)[:150]}")
+            return
+        for row in rows:
+            cc = engine_cc(row.get("DisplacementCC")) or engine_cc(row.get("DisplacementL"))
+            for r in need.get(str(row.get("VIN") or "").upper(), []):
+                if cc:
+                    r["_vin_cc"] = cc
+                    found += 1
+    log(t, f"Объём двигателя по VIN: найден у {found} из {sum(map(len, need.values()))}")
 
 
 EV_WORDS = {"ev", "electric", "электро", "электричество", "электромобиль", "전기"}
@@ -571,6 +617,11 @@ def normalize(raw, src):
     ccf = f.get("engine_cc")
     cc = next((x for x in (engine_cc(pick(raw, p)) for p in ccf) if x), None) if isinstance(ccf, list) else engine_cc(get("engine_cc"))
     fuel = vmap(tr(txt("fuel")))
+    cc = cc or engine_cc(raw.get("_vin_cc")) if isinstance(raw, dict) else cc
+    est = False
+    if not cc and (fuel or "").strip().lower() not in EV_WORDS:
+        cc = default_cc(src, " ".join((txt("make"), txt("model"), txt("title"), tr(txt("make")), tr(txt("model")))), fuel)
+        est = bool(cc)
     extra = customs_usd(year, cc, fuel, usd) if tk.get("customs") else 0
     price = round((usd * tk["mult"] + tk["add_usd"] + extra) / 10) * 10
     km = num(get("km"))
@@ -601,7 +652,8 @@ def normalize(raw, src):
         "costs": {"delivery": tk["add_usd"], "customs": round(extra)} if tk.get("customs") else None,
         "auction_date": auction, "country": src.get("country", ""),
         "km": None if km is None else km * src.get("km_mult", 1), "url": txt("url"), "photos": photos,
-        "engine": tr(txt("engine")) or engine_text(cc, fuel), "engine_cc": cc, "fuel": fuel,
+        "engine": engine_text(cc, fuel, est) if est else (tr(txt("engine")) or engine_text(cc, fuel)), "engine_cc": cc,
+        "engine_est": est, "fuel": fuel,
         "transmission": vmap(tr(txt("transmission"))), "drive": vmap(tr(txt("drive"))), "color": vmap(tr(txt("color"))),
         "notes": notes,
     }
@@ -664,7 +716,7 @@ def read_entries(src):
             if sep and url.startswith("http"):
                 by_url.setdefault(url.strip(), []).append(key.strip())
         for url, keys in by_url.items():
-            entries.append({"label": keys[0], "brand": keys[0].split()[0], "keys": keys, "subs": {"url": url}})
+            entries.append({"label": keys[0], "brand": keys[0].split()[0], "keys": keys, "subs": {"url": copart_url(url, src)}})
     else:
         names = src.get("names", {})  # название из файла → как его понимает поиск Encar («5 Series G30» → «5 Series»)
         groups = {}
@@ -686,6 +738,19 @@ def read_entries(src):
     if src.get("links_file") and src.get("entries_format") != "links" and os.path.exists(src["links_file"]):
         entries += read_entries(dict(src, entries_file=src["links_file"], entries_format="links", links_file=None))
     return entries
+
+
+def copart_url(url, src):
+    """Актор Copart понимает только ссылки поиска /lotSearchResults и /lot/…; ссылки вида
+    /vehicle-search-year/ford/mustang/2020 он не разбирает и отдаёт одни и те же лоты без учёта года.
+    Переводим их в поиск по словам «2020 ford mustang»."""
+    if not src.get("rewrite_copart_links"):
+        return url
+    m = re.search(r"/vehicle-search-year/([^/?#]+)/([^/?#]+)/(\d{4})", url)
+    if not m:
+        return url
+    make, model, year = (requests.utils.unquote(x).replace("-", " ") for x in m.groups())
+    return "https://www.copart.com/lotSearchResults?free=true&query=" + requests.utils.quote(f"{year} {make} {model}")
 
 
 def pick_batch(entries, runs):
@@ -736,6 +801,7 @@ def fetch_apify_list(src):
                 failed += 1
                 continue
         STATS[name]["получено"] += len(raw)
+        vin_fill(raw, src, t)
         got = 0
         for r in raw:
             try:
