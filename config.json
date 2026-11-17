@@ -1,16 +1,5 @@
 {
-  "daily_limit": 10,
-  "per_source_max": 4,
   "max_photos": 10,
-  "pool_size": 40,
-  "tz": "Europe/Minsk",
-  "post_times": [
-    "09:00",
-    "12:00",
-    "17:00",
-    "21:00"
-  ],
-  "slot_tolerance_min": 45,
   "order_link": "@migavtologistic_bot",
   "notes_header": "По предварительной информации:",
   "flag_count": 10,
@@ -28,10 +17,13 @@
     "Привод: {drive}",
     "Цвет: {color}",
     "",
+    "{costs_block}",
+    "",
     "{notes_block}",
     "",
     "{market_block}",
     "",
+    "{source_line}",
     "Для заказа и полной информации 👇",
     "{order_link}"
   ],
@@ -62,7 +54,10 @@
     "client_label": "Цена для клиента",
     "min": 500,
     "max": 3000,
-    "max_cache_days": 3
+    "max_cache_days": 3,
+    "manual_working_rate": null,
+    "manual_rate_date": null,
+    "max_manual_days": 7
   },
   "filters": {
     "year_min": 2018,
@@ -605,7 +600,15 @@
         "drive": "",
         "color": "",
         "notes": []
-      }
+      },
+      "schedule": {
+        "daily_limit": 4,
+        "min_gap_min": 60,
+        "fetch_every_hours": 24
+      },
+      "source_label": "Encar",
+      "show_source": true,
+      "run_timeout_sec": 600
     },
     {
       "name": "Copart",
@@ -668,14 +671,29 @@
             "text": "Повреждение: {}",
             "path": "primaryDamage"
           }
-        ]
+        ],
+        "price_alt": "buyItNowPrice",
+        "price_alt_mult": 1,
+        "auction_date": "auctionDate"
       },
       "country": "US",
       "price_currency": "USD",
       "price_mode": "auction",
       "price_label": "Цена на аукционе:",
-      "price_note": "текущая ставка",
-      "market_line": false
+      "price_note": "текущая ставка, не итог торгов",
+      "market_line": false,
+      "schedule": {
+        "daily_limit": 4,
+        "min_gap_min": 60,
+        "fetch_every_hours": 24
+      },
+      "source_label": "аукцион Copart",
+      "show_source": true,
+      "run_timeout_sec": 600,
+      "price_label_alt": "Купить сейчас:",
+      "price_note_alt": "цена выкупа без торгов",
+      "show_costs": true,
+      "costs_header": "Расходы до Минска (оценка):"
     },
     {
       "name": "mashina.kg",
@@ -731,7 +749,14 @@
         "copart",
         "iaai",
         "manheim"
-      ]
+      ],
+      "schedule": {
+        "daily_limit": 4,
+        "min_gap_min": 60,
+        "fetch_every_hours": 6
+      },
+      "source_label": "mashina.kg",
+      "show_source": true
     }
   ],
   "value_map": {
@@ -784,5 +809,29 @@
     "STRIPPED": "разукомплектован",
     "BIOHAZARD/CHEMICAL": "биологическое/химическое загрязнение",
     "UNKNOWN": "не указано"
+  },
+  "schedule": {
+    "tz": "Europe/Minsk",
+    "days": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "start": "09:00",
+    "end": "21:30",
+    "min_interval_min": 20,
+    "max_interval_min": 60,
+    "daily_limit": 10,
+    "max_per_run": 1,
+    "overdue_grace_min": 30,
+    "queue_ttl_hours": 72,
+    "max_attempts": 4,
+    "retry_base_min": 15,
+    "max_retry_after_wait_sec": 60,
+    "skipped_keep_days": 3
   }
 }

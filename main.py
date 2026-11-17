@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Автопостинг выгодных авто в Telegram-канал.
+"""Автопостинг выгодных авто в Telegram-канал MIGAVTO.
 
-Площадки (Encar, Copart, mashina.kg) → цена «под ключ до Минска» → сравнение с рынком Беларуси (av.by)
-→ до N постов в сутки (фото-альбом + текст по шаблону страны), выкладка несколькими порциями за день.
+Конвейер: площадка → разбор и проверка → нормализация (цена в $, страна, флаг) → проверка дублей →
+база объявлений (state.json) → отбор по рынку av.by → очередь → планировщик (интервалы, рабочие часы) →
+отправка в Telegram → запись результата. Каждая площадка обрабатывается независимо.
 
-python main.py          боевой режим (порция зависит от времени запуска, см. post_times в config.json)
-python main.py --dry    показать выбор в логе, ничего не отправлять и не сохранять
-python main.py --demo   отправить тестовые «ДЕМО»-машины (площадки не нужны, состояние не пишется)
+python main.py --fetch       собрать объявления с площадок, у которых подошёл срок, и поставить в очередь
+python main.py --fetch-all   то же, но со всех площадок сразу
+python main.py --publish     опубликовать объявление, если подошло его время (запускается каждые 15 минут)
+python main.py --status      показать очередь, ближайшие публикации и ошибки
+python main.py --dry         собрать со всех площадок и показать, что попадёт в очередь; ничего не сохраняет
+python main.py --demo        отправить 3 тестовых поста (по одному на страну); база не меняется
 """
+import atexit
 import glob
 import html
 import io
@@ -18,8 +23,8 @@ import re
 import statistics
 import sys
 import time
-from collections import Counter
-from datetime import date, datetime
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta
 from urllib.parse import quote
 
 try:
@@ -33,8 +38,6 @@ TOKEN = os.environ.get("TG_TOKEN", "")
 CHAT = os.environ.get("TG_CHAT", "")
 APIFY = os.environ.get("APIFY_TOKEN", "")
 DEMO, DRY = "--demo" in sys.argv, "--dry" in sys.argv
-PREFETCH = "--prefetch" in sys.argv
-POOL_VERSION = 2  # меняется при изменении расчёта цен: запас дня, собранный старым кодом, пересобирается
 UA = "Mozilla/5.0 (compatible; cars-bot)"
 HANGUL = r"[\uac00-\ud7a3]+"
 UNKNOWN_KO = Counter()
@@ -42,7 +45,25 @@ UNKNOWN_KO = Counter()
 with open("config.json", encoding="utf-8") as f:
     CFG = json.load(f)
 MARKET = CFG.get("market", {})
+SCHED = CFG.get("schedule", {})
 STATE_FILE = "state.json"
+LOCK_FILE = "bot.lock"
+
+
+# ---------- журнал ----------
+STATS = defaultdict(Counter)   # воронка по площадкам: где теряются объявления
+SUMMARY = []                   # копия журнала для сводки запуска в GitHub
+TAGS = {"Encar": "ENCAR", "Copart": "COPART", "mashina.kg": "MASHINA.KG"}
+
+
+def tag(name):
+    return TAGS.get(name) or str(name).upper()
+
+
+def log(t, msg):
+    line = f"[{t}] {msg}"
+    print(line, flush=True)
+    SUMMARY.append(line)
 
 
 DEMO_COUNTRY = {"Encar": "KR", "Copart": "US", "mashina.kg": "KG"}
@@ -52,7 +73,8 @@ def _demo(src, i, title, make, model, year, km, price, market, engine, notes):
     return {
         "src": src, "id": f"demo:{src}:{i}", "title": title, "make": make, "model": model, "country": DEMO_COUNTRY[src],
         "price_usd": {"Encar": price - 9000, "Copart": price - 8000, "mashina.kg": price - 2600}[src],
-        "price_src": None, "currency_src": "USD", "rate": None,
+        "price_src": None, "currency_src": "USD", "rate": None, "price_kind": "main",
+        "costs": {"delivery": 4000, "customs": 4000} if src == "Copart" else None,
         "year": year, "km": km, "price": price, "market": market, "url": "https://example.com",
         "photos": [f"https://picsum.photos/seed/{src}{i}{n}/800/600" for n in range(3)],
         "engine": engine, "transmission": "автомат", "drive": "передний", "color": "чёрный", "notes": notes,
@@ -139,7 +161,7 @@ def parse_number(v):
 
 
 def now_local():
-    tz = CFG.get("tz")
+    tz = SCHED.get("tz") or CFG.get("tz")
     try:
         return datetime.now(ZoneInfo(tz)) if tz and ZoneInfo else datetime.now()
     except Exception:
@@ -161,7 +183,7 @@ def country_of(c):
         return code
     if c.get("src") not in _WARNED:
         _WARNED.add(c.get("src"))
-        print(f"⚠️ Площадка «{c.get('src')}»: страна не задана или её нет в config.json → countries; флаг не ставится")
+        log("БАЗА", f"⚠️ Площадка «{c.get('src')}»: страна не задана или её нет в config.json → countries; флаг не ставится")
     return ""
 
 
@@ -219,7 +241,7 @@ def load_krw_rate(state):
     но не старше krw_rates.max_cache_days. Иначе None, и машины Encar не публикуются."""
     rc = CFG.get("krw_rates") or {}
     if todo(rc.get("sheet_id")):
-        print("⚠️ Курс вон: в config.json не задан krw_rates.sheet_id")
+        log("КУРС", "⚠️ В config.json не задан krw_rates.sheet_id")
         return None
     lo, hi = rc.get("min", 500), rc.get("max", 3000)
     try:
@@ -239,14 +261,18 @@ def load_krw_rate(state):
             check = "сверка формулы не выполнена: в таблице не найдены цена в вонах и цена для клиента"
         rate = {"working": work, "real": real, "day": date.today().isoformat(), "source": "таблица"}
         state["krw_rate"] = rate
-        print(f"Курс вон из таблицы: рабочий {work:g}" + (f", реальный {real:g}" if real else "") + f" ({check})")
+        log("КУРС", f"Курс вон из таблицы: рабочий {work:g}" + (f", реальный {real:g}" if real else "") + f" ({check})")
         return rate
     except Exception as e:
         cached = state.get("krw_rate")
         if cached and (date.today() - date.fromisoformat(cached["day"])).days <= rc.get("max_cache_days", 3):
-            print(f"⚠️ Курс вон: {e}. Использую последний курс из таблицы от {cached['day']}: {cached['working']:g}")
+            log("КУРС", f"⚠️ {e}. Использую последний курс из таблицы от {cached['day']}: {cached['working']:g}")
             return dict(cached, source="кэш")
-        print(f"⚠️ Курс вон не получен: {e}. Машины из Кореи в этом запуске не публикуются")
+        manual, mday = rc.get("manual_working_rate"), rc.get("manual_rate_date")
+        if manual and mday and lo <= manual <= hi and (date.today() - date.fromisoformat(mday)).days <= rc.get("max_manual_days", 7):
+            log("КУРС", f"⚠️ {e}. Таблица недоступна — беру РУЧНОЙ курс из config.json: {manual:g} от {mday}")
+            return {"working": float(manual), "real": None, "day": mday, "source": "ручной"}
+        log("КУРС", f"⚠️ Курс вон не получен: {e}. Encar в этом запуске не опрашивается (чтобы не тратить Apify)")
         return None
 
 
@@ -265,19 +291,38 @@ def to_usd(amount, currency, src):
 
 # ---------- состояние ----------
 def load_state():
-    state = {"seen": [], "sent": {}, "sent_src": {}, "prices": {}, "market": {}, "pool": {}}
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, encoding="utf-8") as f:
-            state.update(json.load(f))
+    """База объявлений. Старый формат (список seen и запас дня) переносится: опубликованное остаётся опубликованным."""
+    state = {"schema": 3, "items": {}, "fetch": {}, "prices": {}, "market": {}, "legacy_sent": {}}
+    if not os.path.exists(STATE_FILE):
+        return state
+    with open(STATE_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("schema") == 3:
+        state.update(data)
+        return state
+    for k in ("prices", "market", "krw_rate"):
+        if k in data:
+            state[k] = data[k]
+    for i in data.get("seen", []):
+        state["items"][i] = {"id": i, "src": i.split(":")[0], "status": "published", "published_at": None,
+                             "attempts": 1, "note": "перенесено из старой версии бота"}
+    state["legacy_sent"] = data.get("sent", {})
+    log("БАЗА", f"Старый формат состояния перенесён: {len(state['items'])} опубликованных объявлений")
     return state
 
 
 def save_state(state):
-    state["sent"] = dict(sorted(state["sent"].items())[-14:])
-    state["sent_src"] = dict(sorted(state["sent_src"].items())[-14:])
+    """Запись атомарно (через временный файл): при сбое старая версия не портится."""
+    keep = SCHED.get("skipped_keep_days", 3)
+    cut = (date.today() - timedelta(days=keep)).isoformat()
+    state["items"] = {k: r for k, r in state["items"].items()
+                      if not (r.get("status") == "skipped" and (r.get("processed_at") or "")[:10] < cut)}
     state["prices"] = {k: dict(list(v.items())[-300:]) for k, v in state["prices"].items()}
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    state["legacy_sent"] = dict(sorted(state.get("legacy_sent", {}).items())[-7:])
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
+    os.replace(tmp, STATE_FILE)
 
 
 # ---------- получение и нормализация данных ----------
@@ -295,11 +340,89 @@ def subst(x, subs, enc=False):
     return x
 
 
+APIFY_API = "https://api.apify.com/v2"
+
+
+def apify_error(r):
+    try:
+        e = r.json().get("error") or {}
+        return f"Apify HTTP {r.status_code}: {e.get('type', '')} {e.get('message', '')}".strip()
+    except ValueError:
+        return f"Apify HTTP {r.status_code}: {r.text[:200]}"
+
+
+def apify_start(actor, inp, timeout_sec=600):
+    """Запуск актора без ожидания (run-sync обрывается через 300 с, а резидентные прокси бывают медленнее)."""
+    if not APIFY:
+        raise ValueError("не задан секрет APIFY_TOKEN")
+    r = requests.post(f"{APIFY_API}/acts/{actor}/runs", params={"token": APIFY, "timeout": int(timeout_sec)},
+                      json=inp, timeout=60)
+    if not r.ok:
+        raise ValueError(apify_error(r))
+    return r.json()["data"]
+
+
+def apify_wait(run, deadline):
+    while run.get("status") in ("READY", "RUNNING") and time.time() < deadline:
+        try:
+            r = requests.get(f"{APIFY_API}/actor-runs/{run['id']}", params={"token": APIFY, "waitForFinish": 60}, timeout=90)
+            if r.ok:
+                run = r.json()["data"]
+                continue
+        except requests.RequestException:
+            pass
+        time.sleep(10)
+    return run
+
+
+def apify_abort(run):
+    try:
+        requests.post(f"{APIFY_API}/actor-runs/{run['id']}/abort", params={"token": APIFY}, timeout=30)
+    except requests.RequestException:
+        pass
+
+
+def apify_items(run):
+    r = requests.get(f"{APIFY_API}/datasets/{run['defaultDatasetId']}/items",
+                     params={"token": APIFY, "clean": "true", "format": "json"}, timeout=120)
+    if not r.ok:
+        raise ValueError(apify_error(r))
+    return r.json() or []
+
+
+def apify_budget():
+    """Сколько потрачено из месячного лимита Apify: частая причина «тишины» Encar и Copart."""
+    try:
+        r = requests.get(f"{APIFY_API}/users/me/limits", params={"token": APIFY}, timeout=30)
+        d = r.json().get("data", {}) if r.ok else {}
+        used, lim = pick(d, "current.monthlyUsageUsd"), pick(d, "limits.maxMonthlyUsageUsd")
+        if isinstance(used, (int, float)) and isinstance(lim, (int, float)) and lim:
+            log("APIFY", f"Израсходовано {used:.2f} $ из {lim:.2f} $ в этом месяце"
+                + (" — ⚠️ лимит почти исчерпан, запуски Encar и Copart будут отклоняться" if used >= lim * 0.9 else ""))
+            return used, lim
+        if not r.ok:
+            log("APIFY", f"⚠️ Не удалось проверить баланс: {apify_error(r)}")
+    except Exception as e:
+        log("APIFY", f"⚠️ Не удалось проверить баланс: {str(e)[:120]}")
+    return None
+
+
+def run_apify(actor, inp, budget_sec, label=""):
+    run = apify_start(actor, inp, budget_sec)
+    run = apify_wait(run, time.time() + budget_sec + 60)
+    if run.get("status") in ("READY", "RUNNING"):
+        apify_abort(run)
+    items = apify_items(run)
+    if run.get("status") != "SUCCEEDED" and not items:
+        raise ValueError(f"запуск {run.get('status')}: {run.get('statusMessage') or ''}")
+    return items
+
+
 def raw_items(src, subs=None):
     subs = subs or {}
     if src["type"] in ("apify", "apify_list"):
-        r = requests.post(f"https://api.apify.com/v2/acts/{src['actor']}/run-sync-get-dataset-items",
-                          params={"token": APIFY}, json=subst(src.get("input", {}), subs), timeout=300)
+        data = run_apify(src["actor"], subst(src.get("input", {}), subs), src.get("run_timeout_sec", 600))
+        return (pick(data, src["items_path"]) if src.get("items_path") else data) or []
     else:
         r = requests.get(subst(src["url"], subs, enc=True), headers=src.get("headers", {}), timeout=60)
     r.raise_for_status()
@@ -366,6 +489,20 @@ def engine_cc(v):
     return round(n * 1000) if n < 20 else round(n)
 
 
+def parse_date(v):
+    """Дата торгов: «2026-11-20T…», «2026-11-20», метка времени в мс или с → «2026-11-20»."""
+    if v in (None, "", 0) or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        ts = v / 1000 if v > 1e11 else v
+        try:
+            return datetime.utcfromtimestamp(ts).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    m = re.match(r"\s*(\d{4})-(\d{2})-(\d{2})", str(v))
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+
 def engine_text(cc, fuel):
     return (f"{cc / 1000:.1f} л" + (f", {fuel}" if fuel else "")) if cc else ""
 
@@ -416,17 +553,17 @@ def normalize(raw, src):
     if missing:
         raise KeyError(f"в config.json для «{src['name']}» не настроены поля {missing}; "
                        f"в ответе площадки есть поля: {list(raw)[:30]}")
-    price_src, year = parse_number(get("price")), parse_year(get("year"))
-    if (not price_src or price_src <= 0) and f.get("price_alt"):  # запасное поле, например цена в манвонах
+    price_src, year, kind = parse_number(get("price")), parse_year(get("year")), "main"
+    if (not price_src or price_src <= 0) and f.get("price_alt"):  # запасное поле: манвоны (Encar), «купить сейчас» (Copart)
         alt = parse_number(pick(raw, f["price_alt"]))
-        price_src = alt * f.get("price_alt_mult", 1) if alt else None
+        price_src, kind = (alt * f.get("price_alt_mult", 1), "alt") if alt else (None, kind)
     cur = (src.get("price_currency") or "USD").upper()
     if cur != "USD" and src.get("price_mult", 1) != 1:
         raise ValueError(f"в config.json у «{src['name']}» одновременно price_currency={cur} и price_mult: двойная конвертация")
     if not year:
         raise ValueError("год не распознан")
     if not price_src or price_src <= 0:
-        raise ValueError("нет цены (у лотов Copart без ставок цена 0): объявление пропущено")
+        raise ValueError("нет цены (у лота Copart нет ни ставки, ни цены «купить сейчас»)")
     if price_src in (src.get("invalid_prices") or []) or price_src < src.get("min_price", 0):
         raise ValueError(f"цена {fmt(price_src)} {cur} похожа на заглушку площадки: объявление пропущено")
     tk = src["turnkey"]
@@ -446,7 +583,9 @@ def normalize(raw, src):
         n = int(num(get("photo_count")) or 1)
         if m and n > 1:
             photos = [f"{photos[0][:m.start()]}_{i:03d}.{m.group(1)}" for i in range(1, min(n, CFG.get("max_photos", 10)) + 1)]
-    notes = []
+    notes, auction = [], parse_date(pick(raw, f.get("auction_date"))) if f.get("auction_date") else None
+    if auction:
+        notes.append(f"📅 Торги: {auction[8:10]}.{auction[5:7]}.{auction[:4]}")
     for n in f.get("notes") or []:
         v = pick(raw, n.get("path"))
         if v in (None, "", 0, "0", False, [], {}):
@@ -457,8 +596,10 @@ def normalize(raw, src):
         "src": src["name"], "id": f"{src['name']}:{get('id')}",
         "title": nice_case(title) if src.get("nice_case") else title,
         "make": tr(txt("make")), "model": tr(txt("model")), "price": price, "year": year,
-        "price_src": price_src, "currency_src": cur, "rate": rate, "price_usd": round(usd),
-        "country": src.get("country", ""),
+        "price_src": price_src, "currency_src": cur, "rate": rate, "price_usd": round(usd), "price_kind": kind,
+        "rate_source": (RATES.get("KRW") or {}).get("source") if rate else None,
+        "costs": {"delivery": tk["add_usd"], "customs": round(extra)} if tk.get("customs") else None,
+        "auction_date": auction, "country": src.get("country", ""),
         "km": None if km is None else km * src.get("km_mult", 1), "url": txt("url"), "photos": photos,
         "engine": tr(txt("engine")) or engine_text(cc, fuel), "engine_cc": cc, "fuel": fuel,
         "transmission": vmap(tr(txt("transmission"))), "drive": vmap(tr(txt("drive"))), "color": vmap(tr(txt("color"))),
@@ -483,8 +624,20 @@ def fetch(src):
     if not cars and first_err:
         raise first_err
     for msg, n in errs.most_common(3):
-        print(f"   пропущено {n} шт. ({src['name']}): {msg}")
+        STATS[src["name"]]["разбор: " + reason_cat(msg)] += n
+    STATS[src["name"]]["получено"] += len(cars) + sum(errs.values())
     return cars
+
+
+def reason_cat(msg):
+    """Короткая причина отказа для воронки."""
+    m = str(msg).lower()
+    for k, cat in (("курс", "нет курса вон"), ("объём", "нет объёма двигателя"), ("заглуш", "цена-заглушка"),
+                   ("нет цены", "нет цены или ставки"), ("год", "нет года"), ("не настроены поля", "поля не совпали с ответом площадки"),
+                   ("двойная", "ошибка настройки валюты"), ("валют", "валюта не поддерживается")):
+        if k in m:
+            return cat
+    return "другое: " + str(msg)[:60]
 
 
 # ---------- список запросов (Copart, Encar) через Apify, по кругу ----------
@@ -543,39 +696,62 @@ def pick_batch(entries, runs):
 
 
 def fetch_apify_list(src):
+    name, t = src["name"], tag(src["name"])
     if not turnkey_ok(src):
         raise ValueError("не заданы turnkey.mult и turnkey.add_usd: цена «под ключ» не посчитана, площадка пропущена")
     entries = read_entries(src)
     if not entries:
         raise ValueError("в файле нет подходящих запросов (проверьте enabled_brands)")
     batch = pick_batch(entries, int(src.get("runs_per_day", 3)))
-    print(f"   {src['name']}: сегодня {len(batch)} из {len(entries)} запросов: " + "; ".join(e["label"] for e in batch))
-    cars, errs, failed, t0 = {}, Counter(), 0, time.time()
-    for e in batch:
-        if time.time() - t0 > src.get("time_budget_sec", 1500):
-            print(f"   время на опрос вышло ({src.get('time_budget_sec', 1500)} с): остальные запросы пропущены")
-            break
+    log(t, f"Запросов сегодня: {len(batch)} из {len(entries)} — " + "; ".join(e["label"] for e in batch))
+    budget = src.get("time_budget_sec", 1500)
+    deadline, runs, failed = time.time() + budget, [], 0
+    for e in batch:  # все запуски стартуют сразу и работают параллельно
+        run_src = dict(src, input=src["input_links"]) if "url" in e["subs"] and src.get("input_links") else src
         try:
-            run_src = dict(src, input=src["input_links"]) if "url" in e["subs"] and src.get("input_links") else src
-            raw = raw_items(run_src, e["subs"])
+            runs.append((e, apify_start(src["actor"], subst(run_src.get("input", {}), e["subs"]), src.get("run_timeout_sec", 600))))
         except Exception as ex:
             failed += 1
-            print(f"   ⚠️ {src['name']} · {e['label']}: {str(ex)[:160]}")
+            log(t, f"⚠️ {e['label']}: запуск не удался — {str(ex)[:200]}")
+            if any(w in str(ex) for w in ("402", "not-enough-usage", "usage-limit", "monthly-usage")):
+                log(t, "⚠️ Похоже, исчерпан лимит Apify: остальные запросы не запускаю")
+                failed = len(batch) - len(runs)
+                break
+    cars, errs = {}, Counter()
+    for e, run in runs:
+        run = apify_wait(run, deadline)
+        status = run.get("status")
+        if status in ("READY", "RUNNING"):
+            apify_abort(run)
+            log(t, f"⚠️ {e['label']}: не уложился в {budget} с — остановлен, беру то, что успел собрать")
+        try:
+            raw = apify_items(run)
+        except Exception as ex:
+            failed += 1
+            log(t, f"⚠️ {e['label']}: не удалось забрать результаты — {str(ex)[:200]}")
             continue
+        if status not in ("SUCCEEDED", "READY", "RUNNING"):
+            log(t, f"⚠️ {e['label']}: запуск завершился со статусом {status}: {str(run.get('statusMessage') or '')[:200]}")
+            if not raw:
+                failed += 1
+                continue
+        STATS[name]["получено"] += len(raw)
         got = 0
         for r in raw:
             try:
                 c = normalize(r, src)
             except (KeyError, TypeError, ValueError) as ex:
-                errs[str(ex)[:140]] += 1
+                errs[reason_cat(ex)] += 1
+                if isinstance(ex, KeyError) and errs[reason_cat(ex)] == 1:
+                    log(t, f"⚠️ {str(ex)[:300]}")
                 continue
             c["market_keys"] = [k for k in e["keys"] if k.rpartition("|")[2] == str(c["year"])]
             cars.setdefault(c["id"], c)
             got += 1
-        print(f"   {src['name']} · {e['label']}: получено {len(raw)}, принято {got}")
-    for msg, n in errs.most_common(3):
-        print(f"   пропущено {n} шт. ({src['name']}): {msg}")
-    if not cars and failed == len(batch):
+        log(t, f"{e['label']}: получено {len(raw)}, разобрано {got}")
+    for cat, n in errs.items():
+        STATS[name]["разбор: " + cat] += n
+    if not cars and failed and failed >= len(batch):
         raise ValueError("ни один запрос не отработал: проверьте APIFY_TOKEN, баланс Apify и вход актора")
     return list(cars.values())
 
@@ -627,8 +803,10 @@ def mashina_car(it, src, keys):
     usd = next((p.get("amount") for p in it.get("prices") or [] if p.get("currency") == "USD"), None) or ap.get("price_usd")
     year = parse_year(ap.get("year") or (A.get("year") or {}).get("value_number"))
     if not usd or not year or not it.get("slug"):
+        STATS[src["name"]]["разбор: нет цены или года"] += 1
         return None
     if not mashina_in_kg(it, src):
+        STATS[src["name"]]["разбор: машина не в Кыргызстане или не в наличии"] += 1
         return None
     tk = src["turnkey"]
     price = round((usd * src.get("price_mult", 1) * tk["mult"] + tk["add_usd"]) / 10) * 10
@@ -684,36 +862,38 @@ def fetch_mashina(src):
     random.Random(date.today().isoformat()).shuffle(links)  # каждый день другой порядок, если не хватит времени на все
     if src.get("max_links"):
         links = links[: int(src["max_links"])]
-    cars, st, t0 = {}, Counter(), time.time()
+    cars, st, t0, t = {}, Counter(), time.time(), tag(src["name"])
+    log(t, f"Ссылок поиска: {len(links)}")
     for n, (url, keys) in enumerate(links, 1):
         if time.time() - t0 > src.get("time_budget_sec", 900):
-            print(f"   время на опрос вышло ({src.get('time_budget_sec', 900)} с): обработано {n - 1} из {len(links)} ссылок")
+            log(t, f"⚠️ Время на опрос вышло ({src.get('time_budget_sec', 900)} с): обработано {n - 1} из {len(links)} ссылок")
             break
         for page in range(1, int(src.get("pages", 1)) + 1):
             u = re.sub(r"([?&]page=)\d+", rf"\g<1>{page}", url) if page > 1 else url
             try:
                 r = requests.get(u, headers={"User-Agent": UA, "Accept-Language": "ru-RU,ru;q=0.9"}, timeout=30)
                 if r.status_code in (403, 429):
-                    print(f"   ⚠️ сайт ограничил доступ (HTTP {r.status_code}) на ссылке {n} из {len(links)}: остановка, получено {len(cars)}")
+                    log(t, f"⚠️ Сайт ограничил доступ (HTTP {r.status_code}) на ссылке {n} из {len(links)}: остановка, получено {len(cars)}")
+                    STATS[src["name"]]["получено"] += st["объявлений"]
                     return list(cars.values())
                 r.raise_for_status()
                 items = mashina_page_items(r.text)
             except Exception as e:
                 st["ошибок"] += 1
                 if st["ошибок"] <= 3:
-                    print(f"   ⚠️ ссылка {n}: {str(e)[:120]}")
+                    log(t, f"⚠️ Ссылка {n}: {str(e)[:120]}")
                 break
             st["страниц"] += 1
             for it in items:
+                st["объявлений"] += 1
                 c = mashina_car(it, src, keys)
                 if c:
                     cars.setdefault(c["id"], c)
-                else:
-                    st["пропущено (в пути/нет цены)"] += 1
             if len(items) < 20:  # последняя страница
                 break
         time.sleep(src.get("delay_sec", 1.0))
-    print(f"   mashina.kg: страниц {st['страниц']}, ошибок {st['ошибок']}, пропущено {st['пропущено (в пути/нет цены)']}, уникальных машин {len(cars)}")
+    STATS[src["name"]]["получено"] += st["объявлений"]
+    log(t, f"Страниц {st['страниц']}, ошибок {st['ошибок']}, объявлений {st['объявлений']}, уникальных машин {len(cars)}")
     if not cars and st["ошибок"]:
         raise ValueError("не удалось получить ни одной страницы: возможно, сайт блокирует запросы с серверов GitHub")
     return list(cars.values())
@@ -822,7 +1002,7 @@ def market_price(c, state, look):
         try:
             raw = raw_items(auto, {"make": make, "model": model, "year": c["year"], "query": f"{make} {model}".strip()})
         except Exception as e:
-            print(f"⚠️ рынок для {k}: {e}")
+            log("AV.BY", f"⚠️ Рынок для {k}: {e}")
             return None
         fl, mult, ps = auto["fields"], auto.get("price_mult", 1), []
         for r in raw:
@@ -833,58 +1013,6 @@ def market_price(c, state, look):
         state["market"][k] = {"price": price, "n": len(ps), "day": date.today().isoformat()}
         return price
     return None
-
-
-def apply_market(cands, state):
-    need, require = MARKET.get("min_discount_pct", 10), MARKET.get("require", True)
-    look, miss, kept = {"n": 0}, Counter(), []
-    for c in sorted(cands, key=lambda c: c["price"]):
-        mp = c.get("market") or market_price(c, state, look)
-        if not mp:
-            miss[mkey(c)] += 1
-            if require:
-                continue
-            c["disc"], c["score"] = None, -1
-        else:
-            c["market"] = mp
-            d = (mp - c["price"]) / mp
-            c["disc"], c["score"] = round(d * 100), d
-            if require and d * 100 < need:
-                continue
-        kept.append(c)
-    if miss:
-        print("Нет цены рынка для:", ", ".join(f"{k} ×{n}" for k, n in miss.most_common(10)))
-    return kept
-
-
-def select(cands, n, per_src, already=None):
-    """Выбирает n лучших: каждый раз берёт лучшее с той площадки, которой в этот день выложено меньше всего
-    (не более per_src в сутки с одной площадки). already — сколько уже выложено сегодня по площадкам."""
-    by = {}
-    for c in sorted(cands, key=lambda c: -c["score"]):
-        by.setdefault(c["src"], []).append(c)
-    cnt, picked = Counter(already or {}), []
-    while len(picked) < n:
-        avail = [s for s, lst in by.items() if lst and cnt[s] < per_src]
-        if not avail:
-            break
-        s = min(avail, key=lambda s: cnt[s])
-        picked.append(by[s].pop(0))
-        cnt[s] += 1
-    return picked
-
-
-def batch_quota(left, now):
-    """Сколько постов выложить в этом запуске: остаток дня делится поровну на оставшиеся окна post_times."""
-    slots = []
-    for t in CFG.get("post_times", []):
-        h, m = map(int, t.split(":"))
-        slots.append(h * 60 + m)
-    if not slots:
-        return left
-    cur = now.hour * 60 + now.minute
-    ahead = [s for s in slots if s >= cur - CFG.get("slot_tolerance_min", 45)]
-    return min(left, -(-left // max(1, len(ahead))))
 
 
 # ---------- текст по шаблону ----------
@@ -899,11 +1027,18 @@ def render(c):
     if mode == "auction":  # Copart: цена аукциона, а не «под ключ»
         if not price_ok(c):
             return None
-        price_lines = [f"{s.get('price_label', 'Цена на аукционе:')} ❤️ {money(c['price_usd'])}", s.get("price_note", "")]
+        alt = c.get("price_kind") == "alt"
+        price_lines = [f"{s.get('price_label_alt' if alt else 'price_label', 'Цена на аукционе:')} ❤️ {money(c['price_usd'])}",
+                       s.get("price_note_alt" if alt else "price_note", "")]
     else:
         price_lines = [f"{s.get('price_label', 'Цена:')} ❤️ {money(c['price'])}", s.get("price_note", "под ключ до Минска")]
     if s.get("show_source_price") and c.get("currency_src") not in (None, "USD") and c.get("price_src"):
         price_lines.append(f"{s.get('source_price_label', 'Цена на площадке:')} {money(c['price_src'], s.get('source_currency_sign', c['currency_src']))}")
+    costs = []
+    if mode == "auction" and s.get("show_costs") and c.get("costs"):
+        costs = [s.get("costs_header", "Расходы до Минска (оценка):"), f"• доставка, оформление: {money(c['costs']['delivery'])}"]
+        if c["costs"].get("customs"):
+            costs.append(f"• растаможка: ≈{NBSP}{money(c['costs']['customs'])}")
     market = []
     if s.get("market_line", True) and c.get("market") and c.get("disc") and c["disc"] > 0:
         market = [f"📊 Средняя на av.by: ≈{NBSP}{money(c['market'])}", f"✅ Выгода: {c['disc']}{NBSP}%"]
@@ -919,6 +1054,8 @@ def render(c):
         "transmission": esc(c.get("transmission")), "drive": esc(c.get("drive")), "color": esc(c.get("color")),
         "notes_block": notes, "market_block": "\n".join(html.escape(x) for x in market),
         "market_line": html.escape(market[0]) if market else "", "order_link": esc(CFG.get("order_link")),
+        "costs_block": "\n".join(html.escape(x) for x in costs),
+        "source_line": html.escape(f"🔎 Источник: {s.get('source_label') or c['src']}") if s.get("show_source", True) else "",
     }
     out = []
     for line in s.get("template") or CFG["template"]:
@@ -932,18 +1069,55 @@ def render(c):
 
 
 # ---------- Telegram ----------
-def tg(method, files=None, **data):
-    r = None
-    for _ in range(2):
-        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/{method}",
-                          data={"chat_id": CHAT, **data}, files=files, timeout=120)
-        if r.status_code == 429:
-            time.sleep(r.json().get("parameters", {}).get("retry_after", 5) + 1)
-            continue
-        break
-    if not r.ok:
-        print(f"⚠️ Telegram {method}: {r.status_code} {r.text[:300]}")
+def tg_result(**kw):
+    r = {"ok": False, "ids": [], "error": "", "retry_after": 0, "uncertain": False, "fatal": False, "skip": False,
+         "temporary": False}
+    r.update(kw)
     return r
+
+
+def tg(method, files=None, **data):
+    """Один вызов Telegram Bot API. Ответ — словарь:
+    ok и ids (message_id) — успех; retry_after — Telegram просит подождать дольше разумного;
+    uncertain — ответ не получен, сообщение могло уйти (повторять нельзя, иначе дубль);
+    fatal — ошибка настроек (токен, чат, права бота)."""
+    for attempt in range(2):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TOKEN}/{method}", data={"chat_id": CHAT, **data},
+                              files=files, timeout=(15, 120))
+        except requests.exceptions.ConnectTimeout as e:
+            return tg_result(error=f"нет соединения с Telegram: {str(e)[:120]}")
+        except requests.exceptions.ConnectionError as e:
+            msg = str(e)
+            if any(w in msg for w in ("NewConnectionError", "Name or service not known", "Failed to resolve", "Connection refused")):
+                return tg_result(error=f"нет соединения с Telegram: {msg[:120]}")
+            return tg_result(error=f"связь оборвалась во время отправки: {msg[:120]}", uncertain=True)
+        except requests.exceptions.Timeout as e:
+            return tg_result(error=f"Telegram не ответил вовремя: {str(e)[:120]}", uncertain=True)
+        except requests.RequestException as e:
+            return tg_result(error=f"ошибка запроса к Telegram: {str(e)[:120]}")
+        try:
+            body = r.json()
+        except ValueError:
+            body = {}
+        if r.status_code == 429:
+            ra = int(pick(body, "parameters.retry_after") or 5)
+            if attempt == 0 and ra <= SCHED.get("max_retry_after_wait_sec", 60):
+                log("TELEGRAM", f"Ограничение частоты Telegram: жду {ra} с")
+                time.sleep(ra + 1)
+                continue
+            return tg_result(error=f"ограничение частоты Telegram: ждать {ra} с", retry_after=ra)
+        if r.ok and body.get("ok", True):
+            res = body.get("result")
+            ids = [m.get("message_id") for m in res if isinstance(m, dict)] if isinstance(res, list) else \
+                ([res.get("message_id")] if isinstance(res, dict) else [])
+            return tg_result(ok=True, ids=ids)
+        desc = str(body.get("description") or r.text[:200])
+        low = desc.lower()
+        fatal = r.status_code in (401, 403, 404) or any(w in low for w in ("chat not found", "not enough rights", "bot was kicked"))
+        log("TELEGRAM", f"⚠️ {method}: {r.status_code} {desc}")
+        return tg_result(error=f"{method}: {r.status_code} {desc}", fatal=fatal, temporary=r.status_code >= 500)
+    return tg_result(error="ограничение частоты Telegram не снялось")
 
 
 def to_jpeg(b):
@@ -969,20 +1143,28 @@ def download(url):
     return None
 
 
+def _stop(r):
+    """После такого ответа нельзя пробовать запасной способ: можно задвоить пост или упереться в лимит."""
+    return r["ok"] or r["uncertain"] or r["retry_after"] or r["fatal"] or r["temporary"]
+
+
 def send_photos(photos, caption, upload=False):
-    """Одно фото или альбом (2–10). Сначала по ссылкам, при отказе Telegram (или upload=True) скачиваем и загружаем сами."""
+    """Одно фото или альбом (2–10). Сначала по ссылкам; если Telegram не смог их скачать — скачиваем и загружаем сами."""
     cap = {"caption": caption, "parse_mode": "HTML"} if caption else {}
     if len(photos) == 1:
-        if not upload and tg("sendPhoto", photo=photos[0], **cap).ok:
-            return True
+        if not upload:
+            r = tg("sendPhoto", photo=photos[0], **cap)
+            if _stop(r):
+                return r
         b = download(photos[0])
-        return bool(b) and tg("sendPhoto", files={"photo": ("p.jpg", b)}, **cap).ok
+        return tg("sendPhoto", files={"photo": ("p.jpg", b)}, **cap) if b else tg_result(error="фото не скачалось")
     if not upload:
         media = [{"type": "photo", "media": u} for u in photos]
         if cap:
             media[0].update(cap)
-        if tg("sendMediaGroup", media=json.dumps(media)).ok:
-            return True
+        r = tg("sendMediaGroup", media=json.dumps(media))
+        if _stop(r):
+            return r
     files, media = {}, []
     for i, u in enumerate(photos):
         b = download(u)
@@ -990,119 +1172,519 @@ def send_photos(photos, caption, upload=False):
             files[f"p{i}"] = (f"p{i}.jpg", b)
             media.append({"type": "photo", "media": f"attach://p{i}"})
     if not media:
-        return False
+        return tg_result(error="ни одно фото не скачалось")
     if len(media) == 1:
-        return tg("sendPhoto", files={"photo": next(iter(files.values()))}, **cap).ok
+        return tg("sendPhoto", files={"photo": next(iter(files.values()))}, **cap)
     if cap:
         media[0].update(cap)
-    return tg("sendMediaGroup", files=files, media=json.dumps(media)).ok
+    return tg("sendMediaGroup", files=files, media=json.dumps(media))
 
 
 def send(c):
+    """Публикация одного объявления: альбом с подписью; длинный текст — отдельным сообщением; без фото — только текст."""
     text = render(c)
     if not text:
-        print(f"⚠️ Пост не собран (нет корректной цены): {c.get('title')}")
-        return False
+        return tg_result(error="пост не собран: нет корректной цены", skip=True)
     photos = c.get("photos", [])[:CFG.get("max_photos", 10)]
-    caption = text if len(text) <= 1024 else None  # длинный текст уходит отдельным сообщением
-    posted = bool(photos) and send_photos(photos, caption, c.get("upload_photos", False))
-    if posted and caption:
+    caption = text if len(text) <= 1024 else None
+    ids = []
+    if photos:
+        r = send_photos(photos, caption, c.get("upload_photos", False))
+        if r["ok"]:
+            ids = r["ids"]
+            if caption:
+                return r
+        elif _stop(r):
+            return r
+        else:
+            log("TELEGRAM", f"Фото не отправились ({r['error']}), публикую текстом")
+    r = tg("sendMessage", text=text, parse_mode="HTML", disable_web_page_preview="true")
+    r["ids"] = ids + r["ids"]
+    if not r["ok"] and ids:  # альбом уже в канале, повтор задвоил бы его
+        r.update(ok=True, error="альбом опубликован, отдельный текст не отправился: " + r["error"])
+    return r
+
+
+# ---------- время и рабочие часы ----------
+def iso(dt):
+    return dt.isoformat(timespec="seconds") if dt else None
+
+
+def parse_dt(s, tzinfo=None):
+    if not s:
+        return None
+    dt = datetime.fromisoformat(s)
+    return dt.replace(tzinfo=tzinfo) if dt.tzinfo is None and tzinfo else dt
+
+
+def _hm(s):
+    h, m = str(s).split(":")
+    return int(h), int(m)
+
+
+def window(day, tzinfo):
+    """Рабочее окно публикаций на дату: (начало, конец)."""
+    sh, sm = _hm(SCHED.get("start", "09:00"))
+    eh, em = _hm(SCHED.get("end", "21:30"))
+    return (datetime(day.year, day.month, day.day, sh, sm, tzinfo=tzinfo),
+            datetime(day.year, day.month, day.day, eh, em, tzinfo=tzinfo))
+
+
+def working_day(day):
+    return day.isoweekday() in SCHED.get("days", [1, 2, 3, 4, 5, 6, 7])
+
+
+def src_rule(name, key, default):
+    return (src_cfg(name).get("schedule") or {}).get(key, default)
+
+
+# ---------- база объявлений: проверка, дубли, очередь ----------
+def fingerprint(c):
+    """Отпечаток для переподанных объявлений (новый ID, та же машина): площадка, название, год, пробег до тысяч км."""
+    km = c.get("km")
+    return f"{c['src']}|{' '.join(tokens(c.get('title', '')))}|{c.get('year')}|{int(round(km / 1000)) if km else '-'}"
+
+
+def verdict(c, state, look):
+    """Почему объявление не публикуется: (категория, подробность) или None, если подходит."""
+    f = CFG["filters"]
+    if not price_ok(c):
+        return "нет корректной цены", "нет корректной цены"
+    if c["year"] < f.get("year_min", 0):
+        return "год меньше минимального", f"год {c['year']} < {f.get('year_min')}"
+    if c["price"] > f.get("price_usd_max", 10 ** 12):
+        return "дороже лимита «под ключ»", f"под ключ {c['price']} $ > {f.get('price_usd_max')} $"
+    if c.get("km") is not None and c["km"] > f.get("km_max", 10 ** 12):
+        return "пробег больше лимита", f"пробег {c['km']:.0f} км > {f.get('km_max')} км"
+    if MARKET.get("mode", "off") == "off":
+        return None
+    mp = c.get("market") or market_price(c, state, look)
+    if not mp:
+        if MARKET.get("require", True):
+            return "нет цены av.by в таблице", f"нет цены av.by для «{mkey(c)}»"
+        return None
+    c["market"] = mp
+    d = (mp - c["price"]) / mp
+    c["disc"], c["score"] = round(d * 100), d
+    need = MARKET.get("min_discount_pct", 10)
+    if MARKET.get("require", True) and d * 100 < need:
+        return f"выгода меньше {need}%", f"выгода {round(d * 100)}% < {need}% (под ключ {c['price']} $, av.by {mp} $)"
+    return None
+
+
+def ingest(name, cars, state, now):
+    """Объявления площадки → база: новые проходят отбор и встают в очередь, известные не дублируются."""
+    items, st, look = state["items"], STATS[name], {"n": 0}
+    fps = {r.get("fp"): r["id"] for r in items.values()
+           if r.get("fp") and r.get("status") in ("published", "publishing", "queued", "scheduled", "failed")}
+    for c in cars:
+        rid, rec = c["id"], items.get(c["id"])
+        if rec and rec.get("status") in ("published", "publishing", "failed"):
+            st["дубль: уже опубликовано или в работе"] += 1
+            continue
+        fp = fingerprint(c)
+        if fps.get(fp) and fps[fp] != rid:
+            st["дубль: переподано с новым ID"] += 1
+            continue
+        c["score"], c["disc"] = score(c, state["prices"])
+        state["prices"].setdefault(key(c), {})[rid] = c["price"]
+        v = verdict(c, state, look)
+        rec = rec or {"id": rid, "src": name, "status": "new", "discovered_at": iso(now), "attempts": 0}
+        was = rec.get("status")
+        rec.update(country=country_of(c), title=c["title"], url=c["url"], fp=fp, processed_at=iso(now))
+        if v:
+            if was in ("queued", "scheduled"):
+                log(tag(name), f"Снято с очереди: {c['title']} — {v[1]}")
+            rec.update(status="skipped", skip_reason=v[1], car=None, scheduled_at=None)
+            st["отбор: " + v[0]] += 1
+        elif was in ("queued", "scheduled"):
+            rec.update(car=c, score=c.get("score"))  # свежие цена и фото, время публикации сохраняется
+            st["обновлено в очереди"] += 1
+        else:
+            rec.update(status="queued", queued_at=iso(now), car=c, score=c.get("score"), skip_reason=None, error=None)
+            st["добавлено в очередь"] += 1
+            fps[fp] = rid
+        items[rid] = rec
+
+
+def funnel(name):
+    """Где теряются объявления площадки."""
+    st, t = STATS[name], tag(name)
+    group = lambda p: {k[len(p):]: v for k, v in st.items() if k.startswith(p) and v}
+    show = lambda d: ", ".join(f"{k}: {v}" for k, v in sorted(d.items(), key=lambda kv: -kv[1]))
+    log(t, f"Получено с площадки: {st['получено']}")
+    if group("разбор: "):
+        log(t, f"Отброшено при разборе: {sum(group('разбор: ').values())} ({show(group('разбор: '))})")
+    if group("дубль: "):
+        log(t, f"Уже в базе: {sum(group('дубль: ').values())} ({show(group('дубль: '))})")
+    if group("отбор: "):
+        log(t, f"Не прошли отбор: {sum(group('отбор: ').values())} ({show(group('отбор: '))})")
+    log(t, f"Добавлено в очередь: {st['добавлено в очередь']}"
+        + (f", обновлено в очереди: {st['обновлено в очереди']}" if st["обновлено в очереди"] else ""))
+
+
+def expire(state, now):
+    """Объявления, которые слишком долго ждут очереди (машину могли продать) или с прошедшими торгами, снимаются."""
+    ttl = timedelta(hours=SCHED.get("queue_ttl_hours", 72))
+    for rec in state["items"].values():
+        if rec.get("status") not in ("queued", "scheduled"):
+            continue
+        qa, ad = parse_dt(rec.get("queued_at"), now.tzinfo), (rec.get("car") or {}).get("auction_date")
+        why = ("торги уже прошли" if ad and ad < now.date().isoformat() else
+               f"устарело: в очереди дольше {SCHED.get('queue_ttl_hours', 72)} ч" if qa and now - qa > ttl else None)
+        if why:
+            rec.update(status="skipped", skip_reason=why, car=None, scheduled_at=None, processed_at=iso(now))
+            log(tag(rec["src"]), f"Снято с очереди: {rec.get('title')} — {why}")
+
+
+def recover(state, now):
+    """Отправка, прерванная падением запуска: неизвестно, ушёл ли пост. Не повторяем, чтобы не было дубля."""
+    for rec in state["items"].values():
+        if rec.get("status") == "publishing":
+            rec.update(status="failed", error="отправка была прервана сбоем запуска; повтор не делался, чтобы не задвоить пост — "
+                                              "проверьте канал вручную", finished_at=iso(now))
+            log("SCHEDULER", f"⚠️ Прерванная отправка: {rec.get('title')} — помечено как ошибка, без повтора")
+
+
+# ---------- планировщик ----------
+def _gap(rnd, lo, hi):
+    return timedelta(minutes=rnd.uniform(lo, hi))
+
+
+def reflow(state, now, rnd=random):
+    """Бот простаивал (GitHub не запускал, сбой): просроченные публикации не отправляются пачкой,
+    а заново раскладываются от текущего момента с обычными интервалами."""
+    tzi, mn, mx = now.tzinfo, SCHED.get("min_interval_min", 20), SCHED.get("max_interval_min", 60)
+    sch = sorted((r for r in state["items"].values() if r.get("status") == "scheduled"),
+                 key=lambda r: r["scheduled_at"])
+    ws, we = window(now.date(), tzi)
+    for r in sch:  # не успели в прошлые дни → обратно в очередь, на сегодня их распределит планировщик
+        if parse_dt(r["scheduled_at"], tzi).date() < now.date():
+            r.update(status="queued", scheduled_at=None)
+    sch = [r for r in sch if r.get("status") == "scheduled"]
+    if not sch:
+        return
+    first = parse_dt(sch[0]["scheduled_at"], tzi)
+    if now - first <= timedelta(minutes=SCHED.get("overdue_grace_min", 30)):
+        return
+    late = sum(1 for r in sch if parse_dt(r["scheduled_at"], tzi) <= now)
+    log("SCHEDULER", f"Просрочено публикаций: {late} — бот не запускался вовремя. Перераспределяю без массовой отправки")
+    t = max(now, ws)
+    for i, r in enumerate(sch):
+        if i:
+            t = t + _gap(rnd, mn, mx)
+        if t > we:
+            r.update(status="queued", scheduled_at=None)
+        else:
+            r["scheduled_at"] = iso(t)
+
+
+def plan(state, now, rnd=random):
+    """Назначает время публикаций на сегодня: случайный интервал в пределах min–max, равномерно по оставшемуся
+    рабочему времени; лимит в день, лимит и пауза по площадкам, чередование площадок."""
+    tzi = now.tzinfo
+    if not working_day(now.date()):
+        return
+    ws, we = window(now.date(), tzi)
+    if now >= we:
+        return
+    items, today = state["items"].values(), now.date().isoformat()
+    mn, mx = SCHED.get("min_interval_min", 20), SCHED.get("max_interval_min", 60)
+    pub = [r for r in items if r.get("status") == "published" and (r.get("published_at") or "")[:10] == today]
+    sch = [r for r in items if r.get("status") == "scheduled"]
+    cap = (SCHED.get("daily_limit", CFG.get("daily_limit", 10)) - len(pub) - len(sch)
+           - state.get("legacy_sent", {}).get(today, 0))
+    cnt = Counter(r["src"] for r in pub + sch)
+    last_src, times = {}, []
+    for r in pub + sch:
+        t = parse_dt(r.get("published_at") or r.get("scheduled_at"), tzi)
+        if t:
+            times.append(t)
+            last_src[r["src"]] = max(last_src.get(r["src"], t), t)
+    anchor = max(times) if times else None
+    queue = sorted((r for r in items if r.get("status") == "queued"), key=lambda r: -(r.get("score") or 0))
+    while cap > 0 and queue:
+        elig = [r for r in queue if cnt[r["src"]] < src_rule(r["src"], "daily_limit", CFG.get("per_source_max", 4))]
+        if not elig:
+            break
+        if anchor is None:  # первая публикация дня — вскоре после начала окна (или после запуска, если окно уже идёт)
+            t = max(now, ws) + _gap(rnd, 0, min(mn, 15))
+        else:
+            n = min(cap, len(elig))
+            rest = (we - max(anchor, now)).total_seconds() / 60
+            target = rest / n if n else mx
+            center = max(mn, min(mx, target))  # равномерно по оставшемуся времени, но в пределах min–max
+            spread = (mx - mn) * 0.25          # и всегда со случайным разбросом
+            t = anchor + _gap(rnd, max(mn, center - spread), min(mx, center + spread))
+            if t < now:
+                t = now + _gap(rnd, 0, min(mn, 10))
+        elig.sort(key=lambda r: (cnt[r["src"]], -(r.get("score") or 0)))
+        pick_rec = None
+        for r in elig:
+            lt = last_src.get(r["src"])
+            if not lt or t >= lt + timedelta(minutes=src_rule(r["src"], "min_gap_min", 0)):
+                pick_rec = r
+                break
+        if not pick_rec:  # у всех площадок ещё идёт пауза: ждём ближайшую
+            pick_rec = min(elig, key=lambda r: last_src[r["src"]] + timedelta(minutes=src_rule(r["src"], "min_gap_min", 0)))
+            t = last_src[pick_rec["src"]] + timedelta(minutes=src_rule(pick_rec["src"], "min_gap_min", 0))
+        if t > we:
+            break
+        pick_rec.update(status="scheduled", scheduled_at=iso(t))
+        queue.remove(pick_rec)
+        cap -= 1
+        cnt[pick_rec["src"]] += 1
+        last_src[pick_rec["src"]] = t
+        anchor = t
+        log("SCHEDULER", f"Запланировано на {t:%H:%M}: [{tag(pick_rec['src'])}] {pick_rec.get('title')}")
+
+
+def keep_spacing(state, now, rnd=random):
+    """После публикации следующая не раньше чем через минимальный интервал."""
+    tzi, mn = now.tzinfo, SCHED.get("min_interval_min", 20)
+    _, we = window(now.date(), tzi)
+    prev = now
+    for r in sorted((r for r in state["items"].values() if r.get("status") == "scheduled"), key=lambda r: r["scheduled_at"]):
+        t = parse_dt(r["scheduled_at"], tzi)
+        if t < prev + timedelta(minutes=mn):
+            t = prev + _gap(rnd, mn, mn + 5)
+            if t > we:
+                r.update(status="queued", scheduled_at=None)
+                continue
+            r["scheduled_at"] = iso(t)
+        prev = t
+
+
+def next_publication(state, now):
+    sch = sorted(r["scheduled_at"] for r in state["items"].values() if r.get("status") == "scheduled")
+    if sch:
+        t = parse_dt(sch[0], now.tzinfo)
+        log("SCHEDULER", f"Следующая публикация: {t:%d.%m %H:%M}")
+    else:
+        q = sum(1 for r in state["items"].values() if r.get("status") == "queued")
+        log("SCHEDULER", f"Запланированных публикаций нет; в очереди {q} (распределятся в рабочее время)")
+
+
+def publish_due(state, now, rnd=random, saver=None):
+    """Публикует подошедшие по времени объявления: не больше max_per_run за запуск, с записью результата."""
+    tzi = now.tzinfo
+    ws, we = window(now.date(), tzi)
+    if not working_day(now.date()) or not ws <= now <= we:
+        log("SCHEDULER", "Сейчас нерабочее время для публикаций")
+        return {"sent": 0, "fatal": False, "tried": 0}
+    due = sorted((r for r in state["items"].values()
+                  if r.get("status") == "scheduled" and parse_dt(r["scheduled_at"], tzi) <= now),
+                 key=lambda r: r["scheduled_at"])
+    out = {"sent": 0, "fatal": False, "tried": 0}
+    for rec in due[:SCHED.get("max_per_run", 1)]:
+        c = rec.get("car") or {}
+        rec.update(status="publishing", attempts=rec.get("attempts", 0) + 1, started_at=iso(now))
+        if saver:
+            saver()  # статус «publishing» на диске до отправки: при падении запуска пост не повторится
+        out["tried"] += 1
+        res = send(c)
+        if res["ok"]:
+            rec.update(status="published", published_at=iso(now), message_ids=res["ids"], error=res["error"] or None,
+                       car=None, price=c.get("price"), price_usd=c.get("price_usd"))
+            out["sent"] += 1
+            log("TELEGRAM", f"Опубликовано: [{tag(rec['src'])}] {rec.get('title')} (message_id {', '.join(map(str, res['ids']))})")
+        elif res["skip"]:
+            rec.update(status="skipped", skip_reason=res["error"], car=None, scheduled_at=None)
+            log("TELEGRAM", f"Пропущено: {rec.get('title')} — {res['error']}")
+        elif res["uncertain"]:
+            rec.update(status="failed", error=res["error"] + " — повтор не делается, чтобы не задвоить пост; проверьте канал")
+            log("TELEGRAM", f"⚠️ {rec.get('title')}: {rec['error']}")
+        else:
+            max_att = SCHED.get("max_attempts", 4)
+            if res["retry_after"]:
+                wait = timedelta(seconds=res["retry_after"] + 5)
+            else:
+                wait = timedelta(minutes=SCHED.get("retry_base_min", 15) * 2 ** (rec["attempts"] - 1))
+            if rec["attempts"] >= max_att:
+                rec.update(status="failed", error=res["error"])
+                log("TELEGRAM", f"⚠️ {rec.get('title')}: попытки исчерпаны ({max_att}) — {res['error']}")
+            else:
+                rec.update(status="scheduled", scheduled_at=iso(now + wait), error=res["error"])
+                log("TELEGRAM", f"⚠️ {rec.get('title')}: {res['error']}. Повтор в {now + wait:%H:%M} "
+                                f"(попытка {rec['attempts'] + 1} из {max_att})")
+            out["fatal"] = out["fatal"] or res["fatal"]
+        if saver:
+            saver()
+    if out["sent"]:
+        keep_spacing(state, now, rnd)
+    return out
+
+
+# ---------- сбор с площадок ----------
+def fetch_due(src, state, now, force):
+    if force:
         return True
-    return tg("sendMessage", text=text, parse_mode="HTML", disable_web_page_preview="true").ok
+    last = parse_dt((state["fetch"].get(src["name"]) or {}).get("last_ok"), now.tzinfo)
+    every = src_rule(src["name"], "fetch_every_hours", 24)
+    return not last or (now - last).total_seconds() / 3600 >= every - 2  # запас 2 ч на задержки запусков GitHub
+
+
+def collect(state, now, force=False):
+    """Каждая площадка — отдельно: сбой одной не останавливает остальные, неудачный сбор повторится в следующий запуск."""
+    srcs = [s for s in CFG["sources"] if s.get("enabled")]
+    if any(s.get("type") in ("apify", "apify_list") and fetch_due(s, state, now, force) for s in srcs):
+        apify_budget()
+    for src in srcs:
+        name, t = src["name"], tag(src["name"])
+        if not fetch_due(src, state, now, force):
+            log(t, "Сбор не нужен: последний был недавно")
+            continue
+        fs = state["fetch"].setdefault(name, {})
+        fs["last_try"] = iso(now)
+        if (src.get("price_currency") or "USD").upper() == "KRW":
+            if "KRW" not in RATES:
+                RATES["KRW"] = load_krw_rate(state)
+            if not RATES.get("KRW"):
+                fs["last_error"] = "нет курса вон"
+                log(t, "⚠️ Пропуск: нет курса вон из Google-таблицы")
+                continue
+        log(t, "Проверка каталога началась")
+        try:
+            cars = fetch(src)
+        except Exception as e:
+            fs["last_error"] = str(e)[:300]
+            log(t, f"⚠️ Ошибка площадки: {str(e)[:300]}")
+            funnel(name)
+            continue
+        log(t, f"Найдено подходящих по разбору: {len(cars)}")
+        ingest(name, cars, state, now)
+        fs.update(last_ok=iso(now), last_error=None, last_count=len(cars))
+        funnel(name)
+
+
+# ---------- отчёт ----------
+def report(state, now):
+    items = list(state["items"].values())
+    by = defaultdict(Counter)
+    for r in items:
+        by[r.get("status")][r.get("src")] += 1
+    for stt in ("queued", "scheduled", "publishing", "published", "failed", "skipped"):
+        if by[stt]:
+            log("БАЗА", f"{stt}: {sum(by[stt].values())} (" + ", ".join(f"{k}: {v}" for k, v in by[stt].items()) + ")")
+    for r in sorted((r for r in items if r.get("status") == "scheduled"), key=lambda r: r["scheduled_at"])[:12]:
+        log("SCHEDULER", f"{parse_dt(r['scheduled_at'], now.tzinfo):%d.%m %H:%M} [{tag(r['src'])}] {r.get('title')}")
+    for r in [r for r in items if r.get("status") == "failed"][-10:]:
+        log("TELEGRAM", f"Ошибка: [{tag(r['src'])}] {r.get('title')} — {r.get('error')}")
+    for name, fs in state.get("fetch", {}).items():
+        log(tag(name), f"Последний успешный сбор: {fs.get('last_ok') or 'не было'}; "
+                       f"последняя ошибка: {fs.get('last_error') or 'нет'}")
+
+
+def write_summary():
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path and SUMMARY:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("### Журнал бота\n\n```\n" + "\n".join(SUMMARY[-400:]) + "\n```\n")
+            SUMMARY.clear()
+        except OSError:
+            pass
+
+
+# ---------- защита от параллельного запуска ----------
+def release_lock():
+    try:
+        os.remove(LOCK_FILE)
+    except OSError:
+        pass
+
+
+def acquire_lock():
+    try:
+        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        atexit.register(release_lock)
+        return True
+    except FileExistsError:
+        try:
+            if time.time() - os.path.getmtime(LOCK_FILE) > 3600:  # «зависшая» блокировка старше часа
+                os.remove(LOCK_FILE)
+                return acquire_lock()
+        except OSError:
+            pass
+        return False
 
 
 # ---------- основной сценарий ----------
-def collect():
-    fetched = {}
-    for src in CFG["sources"]:
-        if not src.get("enabled"):
+def run_demo():
+    seen, sent = set(), 0
+    for c in DEMO_CARS:
+        if c["src"] in seen:
             continue
-        try:
-            cars = fetch(src)
-            fetched.update({c["id"]: c for c in cars})
-            print(f"{src['name']}: получено {len(cars)}")
-        except Exception as e:  # одна сломанная площадка не должна остановить остальные
-            print(f"⚠️ {src['name']}: {e}")
-    return fetched
+        seen.add(c["src"])
+        if sent:
+            time.sleep(5)
+        r = send(dict(c))
+        log("TELEGRAM", ("Демо опубликовано: " if r["ok"] else "⚠️ Демо не отправилось: ") + c["title"]
+            + ("" if r["ok"] else f" — {r['error']}"))
+        sent += r["ok"]
+    if not sent:
+        sys.exit("❌ Ни одно демо-сообщение не отправилось: смотрите ошибки Telegram выше (токен, TG_CHAT, права бота)")
 
 
 def main():
-    if not DRY and not (TOKEN and CHAT):
+    mode = next((a[2:] for a in sys.argv[1:] if a.startswith("--")), "publish")
+    if mode not in ("publish", "fetch", "fetch-all", "status", "dry", "demo"):
+        sys.exit(f"Неизвестный режим --{mode}")
+    if mode in ("publish", "demo") and not (TOKEN and CHAT):
         sys.exit("Не заданы TG_TOKEN и TG_CHAT")
-    state = load_state()
+    if mode == "demo":
+        try:
+            return run_demo()
+        finally:
+            write_summary()
+    if mode != "dry" and not acquire_lock():
+        log("SCHEDULER", "Другой запуск бота ещё работает — этот завершается, чтобы не было параллельной отправки")
+        return
+    try:
+        return run_mode(mode)
+    finally:
+        write_summary()
+        if mode != "dry":
+            release_lock()
+
+
+def run_mode(mode):
     now = now_local()
-    today = now.date().isoformat()
     rd = CFG.get("customs", {}).get("rates_date")
     if rd and (date.today() - date.fromisoformat(rd)).days > 14:
-        print(f"⚠️ Курсы НБРБ в config.json от {rd} устарели: обновите customs.byn_per_usd и customs.byn_per_eur")
-    left = CFG["daily_limit"] - (0 if DEMO else state["sent"].get(today, 0))
-    if left <= 0:
-        print(f"Дневной лимит ({CFG['daily_limit']}) уже исчерпан")
-        return
-    quota = left if DEMO else batch_quota(left, now)
-    seen = set(state["seen"])
-
-    pool = state.get("pool") or {}
-    if not DEMO and pool.get("day") == today and pool.get("fetched") and pool.get("v") == POOL_VERSION:
-        cands = [c for c in pool.get("cars", []) if c["id"] not in seen]
-        print(f"Площадки сегодня уже опрошены, в запасе {len(cands)} подходящих машин")
-        if PREFETCH:
-            return
-    else:
-        if not DEMO and any(s.get("enabled") and (s.get("price_currency") or "USD").upper() == "KRW" for s in CFG["sources"]):
-            RATES["KRW"] = load_krw_rate(state)
-        fetched = {c["id"]: dict(c) for c in DEMO_CARS} if DEMO else collect()
-        if not fetched:
-            print("Нет данных. Проверьте, что площадки включены в config.json (\"enabled\": true)")
-            return
-        for c in fetched.values():
-            c["score"], c["disc"] = score(c, state["prices"])
-        cands = [c for c in fetched.values() if c["id"] not in seen and good(c)]
-        for c in fetched.values():  # копим цены для запасной оценки
-            state["prices"].setdefault(key(c), {})[c["id"]] = c["price"]
-        if MARKET.get("mode", "off") != "off":
-            cands = apply_market(cands, state)
+        log("КУРС", f"⚠️ Курсы НБРБ в config.json от {rd} устарели: обновите customs.byn_per_usd и customs.byn_per_eur")
+    state = load_state()
+    if mode == "status":
+        return report(state, now)
+    recover(state, now)
+    if mode in ("fetch", "fetch-all", "dry"):
+        collect(state, now, force=mode != "fetch")
         if UNKNOWN_KO:
-            print("Не переведены корейские слова (добавьте в config.json → translate):",
-                  ", ".join(f"{w} ×{n}" for w, n in UNKNOWN_KO.most_common(15)))
-        if not DEMO:
-            top = sorted(cands, key=lambda c: -c["score"])[:CFG.get("pool_size", 40)]
-            state["pool"] = {"day": today, "fetched": True, "cars": top, "v": POOL_VERSION}
-        if PREFETCH:
-            if not DRY and not DEMO:
-                save_state(state)
-            print(f"Предзагрузка: подготовлено {len(cands)} машин, публикация в ближайшее окно")
-            return
-
-    already = Counter() if DEMO else Counter(state["sent_src"].get(today, {}))
-    picked = select(cands, quota, CFG["per_source_max"], already)
-    print(f"Сегодня выложено: {0 if DEMO else CFG['daily_limit'] - left} из {CFG['daily_limit']}. "
-          f"Подходит: {len(cands)}, в этом запуске: {len(picked)} (порция {quota})")
-    sent = []
-    for c in picked:
-        if DRY:
-            src_p = f"{fmt(c['price_src'])} {c.get('currency_src')}" if c.get("price_src") else "—"
-            print(f"— [{c['src']} {country_of(c) or '??'}] {c['title']} · {c['year']} · площадка: {src_p}"
-                  + (f" (курс {c['rate']:g})" if c.get("rate") else "")
-                  + f" · в $: {c.get('price_usd')} · под ключ: {c['price']} · рынок: {c.get('market')} · выгода: {c['disc']}%"
-                  + f" · фото: {len(c.get('photos', []))}")
-        elif send(c):
-            sent.append(c)
-            time.sleep(5)
-        else:
-            print("⚠️ Не отправилось:", c["title"])
-    if picked and not DRY and not sent:  # ни один пост не ушёл: запуск должен быть красным, а не «успешным»
-        if not DEMO:
-            save_state(state)  # пул дня сохраняем, чтобы следующий запуск не опрашивал площадки заново
-        sys.exit("❌ Ни одно сообщение не отправилось: смотрите ошибки Telegram выше (токен, TG_CHAT, права бота в канале)")
-    if DRY or DEMO:
+            log("ENCAR", "Не переведены корейские слова (добавьте в config.json → translate): "
+                + ", ".join(f"{w} ×{n}" for w, n in UNKNOWN_KO.most_common(15)))
+    expire(state, now)
+    reflow(state, now)
+    plan(state, now)
+    if mode == "dry":
+        log("SCHEDULER", "Режим проверки: ничего не сохранено и не отправлено")
+        for r in sorted((r for r in state["items"].values() if r.get("status") in ("scheduled", "queued")),
+                        key=lambda r: r.get("scheduled_at") or "9"):
+            c = r.get("car") or {}
+            log(tag(r["src"]), f"{(r.get('scheduled_at') or 'в очереди')[11:16] or 'в очереди'} · {c.get('title')} · {c.get('year')}"
+                + (f" · {fmt(c['price_src'])} {c.get('currency_src')} → {c.get('price_usd')} $ по курсу {c['rate']:g}" if c.get("rate") else "")
+                + f" · под ключ {c.get('price')} $ · av.by {c.get('market')} $ · выгода {c.get('disc')}% · фото {len(c.get('photos', []))}")
         return
-    state["seen"] = (state["seen"] + [c["id"] for c in sent])[-5000:]
-    state["sent"][today] = state["sent"].get(today, 0) + len(sent)
-    per = Counter(state["sent_src"].get(today, {}))
-    per.update(c["src"] for c in sent)
-    state["sent_src"][today] = dict(per)
+    if mode == "publish":
+        res = publish_due(state, now, saver=lambda: save_state(state))
+        save_state(state)
+        next_publication(state, now)
+        if res["fatal"] and not res["sent"]:
+            sys.exit("❌ Публикация не удалась из-за настроек Telegram (токен, TG_CHAT, права бота) — смотрите ошибку выше")
+        return
     save_state(state)
+    next_publication(state, now)
 
 
 if __name__ == "__main__":
