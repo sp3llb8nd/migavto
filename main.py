@@ -733,7 +733,7 @@ def read_entries(src):
                 keys = sorted(k for k in g["keys"] if y0 <= int(k.rpartition("|")[2]) <= y1)
                 entries.append({"label": f"{mb} {mm} {y0}" + (f"–{y1}" if y1 != y0 else ""), "brand": g["brand"], "keys": keys,
                                 "subs": {"manufacturer": mb, "model": mm, "yearFrom": y0, "yearTo": y1, "carType": g["ctype"]}})
-    ymin = (CFG.get("filters") or {}).get("year_min") or CFG.get("year_min")
+    ymin = src_filters(src["name"]).get("year_min") if src.get("name") else CFG["filters"].get("year_min")
     if ymin:  # запросы только по годам ниже минимального — пустая трата Apify: все машины всё равно отсеются
         entries = [e for e in entries if not e["keys"] or any(int(k.rpartition("|")[2]) >= ymin for k in e["keys"]
                                                               if k.rpartition("|")[2].isdigit())]
@@ -758,7 +758,17 @@ def copart_url(url, src):
 
 
 def pick_batch(entries, runs):
-    """Сегодняшняя порция запросов: по кругу, в зависимости от даты (без хранения состояния)."""
+    """Сегодняшняя порция запросов: по кругу, в зависимости от даты (без хранения состояния).
+    Запросы перемешаны по маркам и моделям, чтобы за день собирались разные машины, а не Audi A4, A6, Q5 подряд."""
+    groups = defaultdict(list)
+    for e in entries:
+        groups[e.get("brand", "").lower()].append(e)
+    mixed, lists = [], list(groups.values())
+    while any(lists):
+        for g in lists:
+            if g:
+                mixed.append(g.pop(0))
+    entries = mixed
     n = len(entries)
     start = (date.today().toordinal() * runs) % n if n else 0
     return [entries[(start + i) % n] for i in range(min(runs, n))]
@@ -816,6 +826,10 @@ def fetch_apify_list(src):
                     log(t, f"⚠️ {str(ex)[:300]}")
                 continue
             c["market_keys"] = [k for k in e["keys"] if k.rpartition("|")[2] == str(c["year"])]
+            if src.get("require_query_match"):  # поиск по словам отдаёт и соседние модели и годы: берём только ваши
+                norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
+                qmodels = {norm(" ".join(k.rpartition("|")[0].split()[1:])) for k in e["keys"]}
+                c["query_match"] = bool(c["market_keys"]) and norm(c.get("model")) in qmodels
             cars.setdefault(c["id"], c)
             got += 1
         log(t, f"{e['label']}: получено {len(raw)}, разобрано {got}")
@@ -1100,15 +1114,23 @@ def render(c):
         if not price_ok(c):
             return None
         alt = c.get("price_kind") == "alt"
-        price_lines = [f"{s.get('price_label_alt' if alt else 'price_label', 'Цена на аукционе:')} {CFG.get('price_icon', '')}{money(c['price_usd'])}",
-                       s.get("price_note_alt" if alt else "price_note", "")]
+        price_lines = [f"{s.get('price_label_alt' if alt else 'price_label', 'Цена на аукционе:')} {CFG.get('price_icon', '')}{money(c['price_usd'])}"]
+        if s.get("show_turnkey_estimate"):  # ориентировочно выкуп + доставка + растаможка
+            pre = s.get("turnkey_prefix_alt", "≈") if alt else s.get("turnkey_prefix", "от")
+            price_lines += [f"{s.get('turnkey_label', 'Под ключ до Минска:')} {pre}{NBSP}{money(c['price'])}",
+                            s.get("turnkey_note_alt" if alt else "turnkey_note", "")]
+        else:
+            price_lines.append(s.get("price_note_alt" if alt else "price_note", ""))
     else:
         price_lines = [f"{s.get('price_label', 'Цена:')} {CFG.get('price_icon', '')}{money(c['price'])}", s.get("price_note", "под ключ до Минска")]
     if s.get("show_source_price") and c.get("currency_src") not in (None, "USD") and c.get("price_src"):
         price_lines.append(f"{s.get('source_price_label', 'Цена на площадке:')} {money(c['price_src'], s.get('source_currency_sign', c['currency_src']))}")
     costs = []
     if mode == "auction" and s.get("show_costs") and c.get("costs"):
-        costs = [s.get("costs_header", "Расходы до Минска (оценка):"), f"• доставка, оформление: {money(c['costs']['delivery'])}"]
+        costs = [s.get("costs_header", "Расходы до Минска (оценка):")]
+        if s.get("show_turnkey_estimate"):
+            costs.append(f"• {'выкуп' if c.get('price_kind') == 'alt' else 'ставка сейчас'}: {money(c['price_usd'])}")
+        costs.append(f"• доставка, оформление: {money(c['costs']['delivery'])}")
         if c["costs"].get("customs"):
             costs.append(f"• растаможка: ≈{NBSP}{money(c['costs']['customs'])}")
     market = []
@@ -1317,12 +1339,25 @@ def fingerprint(c):
     return f"{c['src']}|{' '.join(tokens(c.get('title', '')))}|{c.get('year')}|{int(round(km / 1000)) if km else '-'}"
 
 
+def src_filters(name):
+    """Общие фильтры config.json → filters, поверх них — фильтры площадки (sources[…].filters)."""
+    return {**CFG["filters"], **(src_cfg(name).get("filters") or {})}
+
+
+def model_id(c):
+    """Модель без года: «volvo xc60», «hyundai sonata» — для чередования моделей в канале."""
+    make, model = ident(c)
+    return f"{make} {model}".strip().lower()
+
+
 def verdict(c, state, look):
     """Почему объявление не публикуется: (категория, подробность) или None, если подходит."""
-    f = CFG["filters"]
+    f = src_filters(c["src"])
     if not price_ok(c):
         return "нет корректной цены", "нет корректной цены"
-    if c["year"] < f.get("year_min", 0):
+    if c.get("query_match") is False:
+        return "не совпадает с запросом", f"{c['title']}: модель или год не из ваших запросов"
+    if c["year"] < (f.get("year_min") or 0):
         return "год меньше минимального", f"год {c['year']} < {f.get('year_min')}"
     if c["price"] > f.get("price_usd_max", 10 ** 12):
         return "дороже лимита «под ключ»", f"под ключ {c['price']} $ > {f.get('price_usd_max')} $"
@@ -1330,16 +1365,17 @@ def verdict(c, state, look):
         return "пробег больше лимита", f"пробег {c['km']:.0f} км > {f.get('km_max')} км"
     if MARKET.get("mode", "off") == "off":
         return None
+    require = f.get("require_market", MARKET.get("require", True))
     mp = c.get("market") or market_price(c, state, look)
     if not mp:
-        if MARKET.get("require", True):
+        if require:
             return "нет цены av.by в таблице", f"нет цены av.by для «{mkey(c)}»"
         return None
     c["market"] = mp
     d = (mp - c["price"]) / mp
     c["disc"], c["score"] = round(d * 100), d
-    need = MARKET.get("min_discount_pct", 10)
-    if MARKET.get("require", True) and d * 100 < need:
+    need = f.get("min_discount_pct", MARKET.get("min_discount_pct", 10))
+    if require and d * 100 < need:
         return f"выгода меньше {need}%", f"выгода {round(d * 100)}% < {need}% (под ключ {c['price']} $, av.by {mp} $)"
     return None
 
@@ -1363,7 +1399,7 @@ def ingest(name, cars, state, now):
         v = verdict(c, state, look)
         rec = rec or {"id": rid, "src": name, "status": "new", "discovered_at": iso(now), "attempts": 0}
         was = rec.get("status")
-        rec.update(country=country_of(c), title=c["title"], url=c["url"], fp=fp, processed_at=iso(now))
+        rec.update(country=country_of(c), title=c["title"], url=c["url"], fp=fp, model=model_id(c), processed_at=iso(now))
         if v:
             if was in ("queued", "scheduled"):
                 log(tag(name), f"Снято с очереди: {c['title']} — {v[1]}")
@@ -1451,6 +1487,13 @@ def reflow(state, now, rnd=random):
             r["scheduled_at"] = iso(t)
 
 
+def rec_model(r):
+    if r.get("model"):
+        return r["model"]
+    c = r.get("car") or {"title": r.get("title") or "", "year": 0}
+    return model_id(c)
+
+
 def plan(state, now, rnd=random):
     """Назначает время публикаций на сегодня: случайный интервал в пределах min–max, равномерно по оставшемуся
     рабочему времени; лимит в день, лимит и пауза по площадкам, чередование площадок."""
@@ -1467,6 +1510,11 @@ def plan(state, now, rnd=random):
     cap = (SCHED.get("daily_limit", CFG.get("daily_limit", 10)) - len(pub) - len(sch)
            - state.get("legacy_sent", {}).get(today, 0))
     cnt = Counter(r["src"] for r in pub + sch)
+    mlim = SCHED.get("model_daily_limit", 1)
+    mday = Counter(rec_model(r) for r in pub + sch)
+    bday = Counter(rec_model(r).split(" ")[0] for r in pub + sch)  # марки за день: Volvo не идёт подряд
+    since = (now - timedelta(days=SCHED.get("model_repeat_days", 3))).isoformat()
+    mrecent = Counter(rec_model(r) for r in items if r.get("status") == "published" and (r.get("published_at") or "") >= since)
     last_src, times = {}, []
     for r in pub + sch:
         t = parse_dt(r.get("published_at") or r.get("scheduled_at"), tzi)
@@ -1476,7 +1524,8 @@ def plan(state, now, rnd=random):
     anchor = max(times) if times else None
     queue = sorted((r for r in items if r.get("status") == "queued"), key=lambda r: -(r.get("score") or 0))
     while cap > 0 and queue:
-        elig = [r for r in queue if cnt[r["src"]] < src_rule(r["src"], "daily_limit", CFG.get("per_source_max", 4))]
+        elig = [r for r in queue if cnt[r["src"]] < src_rule(r["src"], "daily_limit", CFG.get("per_source_max", 4))
+                and mday[rec_model(r)] < mlim]  # одна модель — не больше mlim раз в день
         if not elig:
             break
         if anchor is None:  # первая публикация дня — вскоре после начала окна (или после запуска, если окно уже идёт)
@@ -1490,7 +1539,8 @@ def plan(state, now, rnd=random):
             t = anchor + _gap(rnd, max(mn, center - spread), min(mx, center + spread))
             if t < now:
                 t = now + _gap(rnd, 0, min(mn, 10))
-        elig.sort(key=lambda r: (cnt[r["src"]], -(r.get("score") or 0)))
+        # сначала площадка, с которой сегодня было меньше постов; затем модель, которую давно не показывали; затем выгода
+        elig.sort(key=lambda r: (cnt[r["src"]], bday[rec_model(r).split(" ")[0]], mrecent[rec_model(r)], -(r.get("score") or 0)))
         pick_rec = None
         for r in elig:
             lt = last_src.get(r["src"])
@@ -1506,6 +1556,8 @@ def plan(state, now, rnd=random):
         queue.remove(pick_rec)
         cap -= 1
         cnt[pick_rec["src"]] += 1
+        mday[rec_model(pick_rec)] += 1
+        bday[rec_model(pick_rec).split(" ")[0]] += 1
         last_src[pick_rec["src"]] = t
         anchor = t
         log("SCHEDULER", f"Запланировано на {t:%H:%M}: [{tag(pick_rec['src'])}] {pick_rec.get('title')}")
@@ -1570,7 +1622,7 @@ def publish_due(state, now, rnd=random, saver=None):
         res = send(c)
         if res["ok"]:
             rec.update(status="published", published_at=iso(now), message_ids=res["ids"], error=res["error"] or None,
-                       car=None, price=c.get("price"), price_usd=c.get("price_usd"))
+                       car=None, price=c.get("price"), price_usd=c.get("price_usd"), calc=calc_of(c))
             out["sent"] += 1
             log("TELEGRAM", f"Опубликовано: [{tag(rec['src'])}] {rec.get('title')} (message_id {', '.join(map(str, res['ids']))})")
         elif res["skip"]:
@@ -1643,8 +1695,61 @@ def collect(state, now, force=False):
 
 
 # ---------- отчёт ----------
+def calc_of(c):
+    """Короткая запись расчёта цены для проверки (хранится и после публикации)."""
+    return {k: c.get(k) for k in ("price_src", "currency_src", "rate", "price_usd", "price", "costs", "engine_cc",
+                                  "engine_est", "year", "market", "disc", "price_kind")}
+
+
+def calc_line(r):
+    """Расчёт цены одной строкой: цена на площадке → курс → $ → доставка → растаможка → итог."""
+    k = r.get("calc") or {}
+    usd = k.get("price_usd") or r.get("price_usd")
+    total = k.get("price") or r.get("price")
+    if not usd:
+        return "расчёт не сохранён"
+    src = src_cfg(r["src"])
+    tk = src.get("turnkey") or {}
+    parts = []
+    if k.get("rate"):
+        parts.append(f"{fmt(k['price_src'])} {k.get('currency_src')} / курс {k['rate']:g} = {fmt(usd)} $")
+    else:
+        parts.append(f"цена {fmt(usd)} $")
+    costs = k.get("costs") or {}
+    delivery = costs.get("delivery", tk.get("add_usd", 0))
+    customs = costs.get("customs")
+    if customs is None and total and tk.get("customs"):
+        customs = round(total - usd * tk.get("mult", 1) - delivery)
+    parts.append(f"+ доставка и оформление {fmt(delivery)} $")
+    if tk.get("customs"):
+        cc = k.get("engine_cc")
+        parts.append(f"+ растаможка ≈{fmt(customs or 0)} $" + (f" ({'≈' if k.get('engine_est') else ''}{cc} см³, {k.get('year')} г.)" if cc else ""))
+    if src.get("price_mode") == "auction":
+        parts.append(f"(в посте — цена аукциона {fmt(usd)} $, «под ключ» ≈{fmt(total)} $ только для отбора)")
+    else:
+        parts.append(f"= под ключ {fmt(total)} $")
+    if k.get("market"):
+        parts.append(f"| av.by {fmt(k['market'])} $, выгода {k.get('disc')}%")
+    return " ".join(parts)
+
+
 def report(state, now):
     items = list(state["items"].values())
+    pubs = sorted((r for r in items if r.get("status") == "published" and r.get("published_at")),
+                  key=lambda r: r["published_at"])[-12:]
+    for r in pubs:
+        log(tag(r["src"]), f"Опубликовано {r['published_at'][8:10]}.{r['published_at'][5:7]} {r['published_at'][11:16]}: "
+                           f"{r.get('title')} — {r.get('url') or 'ссылки нет'}")
+        log(tag(r["src"]), "   Расчёт: " + calc_line(r))
+    for r in sorted((r for r in items if r.get("status") in ("scheduled", "queued")), key=lambda r: r.get("scheduled_at") or "9")[:20]:
+        log(tag(r["src"]), f"{'Запланировано ' + r['scheduled_at'][11:16] if r.get('scheduled_at') else 'В очереди'}: "
+                           f"{r.get('title')} — {r.get('url')}")
+        log(tag(r["src"]), "   Расчёт: " + calc_line(dict(r, calc=calc_of(r.get("car") or {}))))
+    for name in TAGS:
+        rs = [r for r in items if r.get("src") == name and r.get("status") == "skipped" and r.get("skip_reason")]
+        if rs:
+            top = Counter(re.split(r"[\d(«]", r["skip_reason"])[0].strip(" :-–—")[:35] for r in rs).most_common(5)
+            log(tag(name), "Причины отсева (в базе): " + "; ".join(f"{w} ×{n}" for w, n in top))
     by = defaultdict(Counter)
     for r in items:
         by[r.get("status")][r.get("src")] += 1

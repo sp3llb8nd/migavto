@@ -525,7 +525,7 @@
         "Volvo"
       ],
       "group_years": true,
-      "runs_per_day": 3,
+      "runs_per_day": 4,
       "time_budget_sec": 1500,
       "names": {
         "5 Series G30": "5 Series",
@@ -545,7 +545,7 @@
         "yearMax": "{yearTo}",
         "sortBy": "ModifiedDate",
         "scrapeDetails": false,
-        "maxItems": 6
+        "maxItems": 5
       },
       "input_links": {
         "searchUrls": [
@@ -553,7 +553,7 @@
         ],
         "sortBy": "ModifiedDate",
         "scrapeDetails": false,
-        "maxItems": 6
+        "maxItems": 5
       },
       "items_path": "",
       "price_currency": "KRW",
@@ -683,7 +683,7 @@
       "country": "US",
       "price_currency": "USD",
       "price_mode": "auction",
-      "price_label": "Цена на аукционе:",
+      "price_label": "Текущая ставка:",
       "price_note": "текущая ставка, не итог торгов",
       "market_line": false,
       "schedule": {
@@ -697,13 +697,24 @@
       "price_label_alt": "Купить сейчас:",
       "price_note_alt": "цена выкупа без торгов",
       "show_costs": true,
-      "costs_header": "Расходы до Минска (оценка):",
+      "costs_header": "Из чего складывается:",
       "rewrite_copart_links": true,
       "vin_field": [
         "vin",
         "VIN",
         "vinNumber"
-      ]
+      ],
+      "show_turnkey_estimate": true,
+      "turnkey_label": "Под ключ до Минска:",
+      "turnkey_prefix": "от",
+      "turnkey_prefix_alt": "≈",
+      "turnkey_note": "итог зависит от финальной ставки",
+      "turnkey_note_alt": "при выкупе без торгов",
+      "require_query_match": true,
+      "filters": {
+        "year_min": 0,
+        "require_market": false
+      }
     },
     {
       "name": "mashina.kg",
@@ -842,7 +853,9 @@
     "max_attempts": 4,
     "retry_base_min": 15,
     "max_retry_after_wait_sec": 60,
-    "skipped_keep_days": 3
+    "skipped_keep_days": 3,
+    "model_daily_limit": 1,
+    "model_repeat_days": 3
   },
   "engine_defaults_note": "Типовой объём двигателя (см³), если площадка не дала объём: [«марка модель», «diesel»/«petrol»/null, см³]. В посте такой объём помечается «≈».",
   "engine_defaults": [
